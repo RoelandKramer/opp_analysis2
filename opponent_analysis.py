@@ -1,512 +1,115 @@
-# opponent_analysis.py
+# app.py
+import streamlit as st
 import json
-import math
-import pandas as pd
-import numpy as np
-import matplotlib.pyplot as plt
-import matplotlib.cm as cm
-import matplotlib.patheffects as PathEffects
-from matplotlib.patches import Polygon
-import matplotlib.image as mpimg
-from collections import Counter, defaultdict
-from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
-from pathlib import Path
+import os
+import opponent_analysis as oa
 
-# ==========================================
-# 1. CONFIG & TEAM MAPPING
-# ==========================================
-TEAM_NAME_MAPPING = {
-    "ADO Den Haag": "ADO Den Haag", "Almere City FC": "Almere City FC", "De Graafschap": "De Graafschap",
-    "Eindhoven": "Eindhoven", "FC Den Bosch": "FC Den Bosch", "FC Dordrecht": "FC Dordrecht",
-    "FC Emmen": "FC Emmen", "Helmond Sport": "Helmond Sport", "Jong AZ": "Jong AZ",
-    "Jong Ajax": "Jong Ajax", "Jong FC Utrecht": "Jong FC Utrecht", "Jong PSV": "Jong PSV",
-    "MVV Maastricht": "MVV Maastricht", "RKC Waalwijk": "RKC Waalwijk", "Roda JC Kerkrade": "Roda JC Kerkrade",
-    "SC Cambuur": "SC Cambuur", "TOP Oss": "TOP Oss", "VVV-Venlo": "VVV-Venlo",
-    "Vitesse": "Vitesse", "Willem II": "Willem II",
-    "Almere City": "Almere City FC", "Den Bosch": "FC Den Bosch", "Dordrecht": "FC Dordrecht",
-    "AZ Alkmaar U23": "Jong AZ", "Ajax Amsterdam U21": "Jong Ajax", "Jong Utrecht": "Jong FC Utrecht",
-    "Jong PSV Eindhoven": "Jong PSV", "MVV": "MVV Maastricht", "VVV Venlo": "VVV-Venlo",
-    "VVV-Venlo VVV-Venlo": "VVV-Venlo"
+# --- CONFIGURATION ---
+st.set_page_config(page_title="Opponent Analysis - Set Pieces", layout="wide")
+
+DATA_PATH = "data/corner_events_all_matches.json"
+ATTACKING_CSV = "data/attacking_headers.csv"
+DEFENSIVE_CSV = "data/defensive_headers.csv"
+
+IMG_PATHS = {
+    "def_L": "images/no_names_left.png",
+    "def_R": "images/no_names_right.png",
+    "att_L": "images/left_side_corner.png",
+    "att_R": "images/right_side_corner.png"
 }
 
-def get_canonical_team(raw_name: Any) -> Optional[str]:
-    if not isinstance(raw_name, str): return None
-    return TEAM_NAME_MAPPING.get(raw_name.strip())
+# --- CACHED LOADING ---
+@st.cache_data
+def load_local_data(path):
+    if not os.path.exists(path): return None
+    with open(path, 'r', encoding='utf-8') as f: return json.load(f)
 
-def extract_all_teams(json_data: Dict[str, Any]) -> List[str]:
-    teams = set()
-    matches = json_data.get("matches", [])
-    for match in matches:
-        for ev in match.get("corner_events", []):
-            canon = get_canonical_team(ev.get("teamName"))
-            if canon: teams.add(canon)
-    return sorted(list(teams))
+@st.cache_data
+def get_team_list(json_data):
+    return oa.extract_all_teams(json_data)
 
-# ==========================================
-# 2. HELPER FUNCTIONS
-# ==========================================
-def _safe_int(x: Any, default: int = -1) -> int:
-    try: return int(x)
-    except: return default
+@st.cache_data
+def get_analysis_results(json_data, team_name):
+    # Pass just the canonical name
+    return oa.process_corner_data(json_data, team_name)
 
-def _iter_numbers(x: Any) -> Iterable[float]:
-    if isinstance(x, (int, float)) and math.isfinite(float(x)): yield float(x)
+def get_img_path(key):
+    path = IMG_PATHS.get(key)
+    return path if path and os.path.exists(path) else None
 
-def _round_up_to_step(value, step): return math.ceil(value / step) * step
+# --- SIDEBAR ---
+st.sidebar.header("Configuration")
+json_data = load_local_data(DATA_PATH)
 
-def _collect_event_xy(events):
-    xs, ys = [], []
-    for ev in events:
-        for k in ("startPosXM", "endPosXM"): xs.extend(_iter_numbers(ev.get(k)))
-        for k in ("startPosYM", "endPosYM"): ys.extend(_iter_numbers(ev.get(k)))
-    return np.array(xs, dtype=float), np.array(ys, dtype=float)
+if not json_data:
+    st.error(f"❌ Data file not found at: `{DATA_PATH}`")
+    st.stop()
 
-def detect_field_bounds_from_events(events, q=0.999, margin_m=1.0, round_step_m=0.5):
-    xs, ys = _collect_event_xy(events)
-    if xs.size == 0 or ys.size == 0: return 52.5, -52.5, 34.0, -34.0
-    abs_x, abs_y = np.abs(xs), np.abs(ys)
-    half_len = _round_up_to_step(float(np.nanquantile(abs_x, q)) + margin_m, round_step_m)
-    half_wid = _round_up_to_step(float(np.nanquantile(abs_y, q)) + margin_m, round_step_m)
-    return max(half_len, 45.0), -max(half_len, 45.0), max(half_wid, 28.0), -max(half_wid, 28.0)
+all_teams = get_team_list(json_data)
+selected_team = st.sidebar.selectbox("Select team", all_teams)
 
-def _safe_abs_float(x):
-    try:
-        v = float(x)
-        return abs(v) if math.isfinite(v) else None
-    except: return None
-
-def _resolve_pitch_bounds(match, events):
-    top_x = _safe_abs_float(match.get("pitch_top_x"))
-    left_y = _safe_abs_float(match.get("pitch_left_y"))
-    if top_x is None or left_y is None:
-        for ev in events:
-            if top_x is None: top_x = _safe_abs_float(ev.get("pitch_top_x"))
-            if left_y is None: left_y = _safe_abs_float(ev.get("pitch_left_y"))
-            if top_x and left_y: break
-    if top_x and left_y: return max(top_x, 45.0), -max(top_x, 45.0), max(left_y, 28.0), -max(left_y, 28.0)
-    return detect_field_bounds_from_events(events)
-
-def get_corner(start_x, start_y, TOP_X, LEFT_Y, thresh=10.0):
-    corners = {"top_left": (TOP_X, LEFT_Y), "top_right": (TOP_X, -LEFT_Y),
-               "bottom_left": (-TOP_X, LEFT_Y), "bottom_right": (-TOP_X, -LEFT_Y)}
-    best_name, best_dist = None, float("inf")
-    for name, (cx, cy) in corners.items():
-        d = math.hypot(start_x - cx, start_y - cy)
-        if d < best_dist: best_dist, best_name = d, name
-    return best_name if best_dist <= thresh else None
-
-def build_zones(top_x, bottom_x, left_y, right_y):
-    length_PA = 16.5; width_PA = 40.32; length_PB = 5.49; width_PB = 18.29
-    PA_x = top_x - length_PA; PB_x = top_x - length_PB
-    half_PA = width_PA / 2; half_PB = width_PB / 2
-    PS_x = top_x - 11; edge_x = top_x - (length_PA + 4); GA_band = width_PB / 3
-
-    zones_TL = {
-        "Short_Corner_Zone": [(top_x, left_y), (top_x, half_PA), (PA_x, left_y), (PA_x, half_PA)],
-        "Front_Zone": [(top_x, half_PA), (top_x, half_PB), (PA_x, half_PB), (PA_x, half_PA)],
-        "Back_Zone": [(top_x, -half_PB), (top_x, -half_PA), (PA_x, -half_PA), (PA_x, -half_PB)],
-        "GA1": [(top_x, half_PB), (top_x, half_PB - GA_band), (PB_x, half_PB - GA_band), (PB_x, half_PB)],
-        "GA2": [(top_x, half_PB - GA_band), (top_x, half_PB - 2 * GA_band), (PB_x, half_PB - 2 * GA_band), (PB_x, half_PB - GA_band)],
-        "GA3": [(top_x, half_PB - 2 * GA_band), (top_x, -half_PB), (PB_x, -half_PB), (PB_x, half_PB - 2 * GA_band)],
-        "CA1": [(PB_x, half_PB), (PB_x, half_PB - GA_band), (PS_x, half_PB - GA_band), (PS_x, half_PB)],
-        "CA2": [(PB_x, half_PB - GA_band), (PB_x, half_PB - 2 * GA_band), (PS_x, half_PB - 2 * GA_band), (PS_x, half_PB - GA_band)],
-        "CA3": [(PB_x, half_PB - 2 * GA_band), (PB_x, -half_PB), (PS_x, -half_PB), (PS_x, half_PB - 2 * GA_band)],
-        "Edge_Zone": [(PS_x, half_PB), (PS_x, -half_PB), (edge_x, -half_PB), (edge_x, half_PB)],
-    }
-    zones_BR = {n: [(-x, -y) for x, y in r] for n, r in zones_TL.items()}
-    zones_TR = {n: [(x, -y) for x, y in r] for n, r in zones_TL.items()}
-    zones_BL = {n: [(-x, y) for x, y in r] for n, r in zones_TL.items()}
-    return zones_TL, zones_BR, zones_TR, zones_BL
-
-def point_in_rect(px, py, rect):
-    xs, ys = [p[0] for p in rect], [p[1] for p in rect]
-    return min(xs) <= px <= max(xs) and min(ys) <= py <= max(ys)
-
-def _assign_zone(ex, ey, zones):
-    for n, r in zones.items():
-        if point_in_rect(ex, ey, r): return n
-    return None
-
-def _sequence_has_shot(seq):
-    return any(ev.get("baseTypeName") == "SHOT" or ev.get("baseTypeId") == 6 for ev in seq)
-
-def _is_true_corner_start(ev):
-    if ev.get("possessionTypeName") != "CORNER": return False
-    if ev.get("sequenceStart") is not True: return False
-    st = ev.get("subTypeName", "")
-    return isinstance(st, str) and st.strip().upper().startswith("CORNER")
-
-def _valid_zone_for_shot_lists(zone_val):
-    return zone_val and str(zone_val).strip() != "" and zone_val != "Short_Corner_Zone"
-
-def _flip_name(name):
-    parts = [p for p in name.strip().split() if p]
-    if len(parts) == 2: return f"{parts[1]} {parts[0]}"
-    return name.strip()
-
-ZONE_ORDER = ["Short_Corner_Zone", "Front_Zone", "Back_Zone", "GA1", "GA2", "GA3", "CA1", "CA2", "CA3", "Edge_Zone", "Unassigned"]
-
-# ==========================================
-# 3. ANALYSIS LOGIC
-# ==========================================
-
-def _build_corner_taker_tables(left_corners, right_corners, min_corners=5):
-    """
-    Shows 'Most Popular', '2nd Most Popular', '3rd Most Popular' zones.
-    Filters out 'Unassigned' from ranking if possible.
-    """
-    def _one_side_table(corners, side_name):
-        total_by_player = Counter()
-        zone_counts = defaultdict(Counter)
-        cross_attempts = defaultdict(int)
-        cross_successes = defaultdict(int)
-
-        for e in corners:
-            player = e.get("playerName", "").strip()
-            if not player: continue
-            
-            z = e.get("zone", "Unassigned") or "Unassigned"
-            total_by_player[player] += 1
-            zone_counts[player][z] += 1
-            
-            if z not in ("Short_Corner_Zone", "Unassigned"):
-                cross_attempts[player] += 1
-                if e.get("resultName") == "SUCCESSFUL": cross_successes[player] += 1
+# --- MAIN APP ---
+if json_data and selected_team:
+    
+    with st.spinner(f"Analyzing {selected_team}..."):
+        results = get_analysis_results(json_data, selected_team)
+        viz_config = oa.get_visualization_coords()
         
-        rows = []
-        for player, total in total_by_player.items():
-            if total < min_corners: continue
-            
-            attempts = cross_attempts[player]
-            succ = cross_successes[player]
-            rate = round((succ / attempts) * 100.0, 1) if attempts > 0 else np.nan
-            
-            # --- TOP 3 ZONES LOGIC ---
-            # Get all counts, filter Unassigned unless it's the only thing
-            counts = zone_counts[player]
-            
-            # Sort by count desc, then alphabetically to break ties consistently
-            # Filter out 'Unassigned' for the top list, unless it's critical context
-            valid_zones = [(z, c) for z, c in counts.items() if z != "Unassigned"]
-            valid_zones.sort(key=lambda x: (-x[1], x[0])) # Sort by count DESC, then Name ASC
-            
-            # Helper to format string "Zone (50%)"
-            def fmt_zone(idx):
-                if idx >= len(valid_zones): return "-"
-                zn, cnt = valid_zones[idx]
-                pct = round((cnt / total) * 100.0, 0)
-                return f"{zn} ({int(pct)}%)"
+        # Load the Player Bar Charts
+        fig_att_bars = oa.plot_attacking_headers_chart(ATTACKING_CSV, selected_team)
+        fig_def_bars = oa.plot_defenders_chart(DEFENSIVE_CSV, selected_team)
 
-            row = {
-                "Side": side_name.title(),
-                "Player": player,
-                "Corners": int(total),
-                "Succ. %": f"{rate}%" if not pd.isna(rate) else "-",
-                "1st Choice": fmt_zone(0),
-                "2nd Choice": fmt_zone(1),
-                "3rd Choice": fmt_zone(2)
-            }
-            rows.append(row)
+    st.title("Opponent analysis - Set Pieces")
+    st.markdown(f"**Matches Analyzed:** {results['used_matches']} | **Team:** {selected_team}")
+
+    # --- ROW 1: ATTACKING PLOTS ---
+    col1, col2 = st.columns(2)
+    with col1:
+        # Title updated here to include count info, removing need for chart title
+        st.subheader(f"Att. Corners Left ({results['own_left_count']} corners)")
+        st.pyplot(oa.plot_percent_attacking(get_img_path("att_L"), viz_config["att_L"], viz_config["att_centers_L"], results["attacking"]["left_pct"], ""))
+    with col2:
+        st.subheader(f"Att. Corners Right ({results['own_right_count']} corners)")
+        st.pyplot(oa.plot_percent_attacking(get_img_path("att_R"), viz_config["att_R"], viz_config["att_centers_R"], results["attacking"]["right_pct"], ""))
+
+    # --- ROW 2: TABLES ---
+    st.divider()
+    col1, col2 = st.columns(2)
+    with col1:
+        st.markdown("##### 📋 Corner Takers (Left)")
+        st.dataframe(results["tables"]["left"], use_container_width=True, hide_index=True)
+    with col2:
+        st.markdown("##### 📋 Corner Takers (Right)")
+        st.dataframe(results["tables"]["right"], use_container_width=True, hide_index=True)
+
+    # --- ROW 3: DEFENDING PLOTS ---
+    st.divider()
+    col1, col2 = st.columns(2)
+    with col1:
+        # We manually access the counts dictionary we returned to get the total
+        count_L = results['def_left_count']
+        st.subheader(f"Def. Corners Left ({count_L} corners)")
+        tot, ids, pcts = results["defensive"]["left"]
+        st.pyplot(oa.plot_shots_defensive(get_img_path("def_L"), viz_config["def_L"], pcts, tot, ids, ""))
+    with col2:
+        count_R = results['def_right_count']
+        st.subheader(f"Def. Corners Right ({count_R} corners)")
+        tot, ids, pcts = results["defensive"]["right"]
+        st.pyplot(oa.plot_shots_defensive(get_img_path("def_R"), viz_config["def_R"], pcts, tot, ids, ""))
         
-        df = pd.DataFrame(rows)
-        # Sort by Corners descending
-        return df if df.empty else df.sort_values(["Corners"], ascending=[False])
-
-    df_left = _one_side_table(left_corners, "left")
-    df_right = _one_side_table(right_corners, "right")
+    # --- ROW 4: PLAYER BAR CHARTS ---
+    st.divider()
+    st.subheader("📊 Player Stats")
+    col1, col2 = st.columns(2)
     
-    # Return empty if nothing found, else formatted table
-    return {"left": df_left, "right": df_right}
-
-def process_corner_data(json_data, team_aliases):
-    matches = json_data.get("matches", [])
-    opponent_left_side, opponent_right_side = [], []
-    own_left_side, own_right_side = [], []
-    opponent_seq_with_shot = []
-    used_matches = 0
-    _seen_seq_keys = set()
-    
-    # Resolve single canonical name for filtering
-    target_canon = get_canonical_team(team_aliases[0])
-
-    for match in matches:
-        events = match.get("corner_events", [])
-        if not events: continue
-
-        # Filter by team presence in match
-        match_teams = set()
-        for ev in events:
-            c = get_canonical_team(ev.get("teamName"))
-            if c: match_teams.add(c)
-        if target_canon not in match_teams: continue
-        
-        used_matches += 1
-        TOP_X, BOTTOM_X, LEFT_Y, RIGHT_Y = _resolve_pitch_bounds(match, events)
-        zones_TL, zones_BR, zones_TR, zones_BL = build_zones(TOP_X, BOTTOM_X, LEFT_Y, RIGHT_Y)
-        sequences_by_id = defaultdict(list)
-        for ev in events: 
-            if ev.get("sequenceId"): sequences_by_id[ev["sequenceId"]].append(ev)
-
-        for e in events:
-            if not _is_true_corner_start(e): continue
+    with col1:
+        if fig_def_bars:
+            st.pyplot(fig_def_bars)
+        else:
+            st.info("No defensive header data found for this team.")
             
-            raw_team = e.get("teamName", "")
-            is_own = (get_canonical_team(raw_team) == target_canon)
-            
-            sx, sy, ex, ey = e.get("startPosXM"), e.get("startPosYM"), e.get("endPosXM"), e.get("endPosYM")
-            if None in (sx, sy, ex, ey): continue
-            
-            corner_type = get_corner(float(sx), float(sy), TOP_X, LEFT_Y)
-            if not corner_type: continue
-            
-            if corner_type in ("top_left", "bottom_right"):
-                local_zones, e_side = (zones_TL if corner_type == "top_left" else zones_BR), "left"
-            else:
-                local_zones, e_side = (zones_TR if corner_type == "top_right" else zones_BL), "right"
-            
-            zone_end = _assign_zone(float(ex), float(ey), local_zones) or _assign_zone(-float(ex), -float(ey), local_zones)
-            e["zone"], e["corner_side"] = zone_end, e_side
-
-            if e_side == "left": (own_left_side if is_own else opponent_left_side).append(e)
-            else: (own_right_side if is_own else opponent_right_side).append(e)
-
-            if seq_id := e.get("sequenceId"):
-                seq_evs = sequences_by_id[seq_id]
-                key = (match.get("match_id"), seq_id, is_own)
-                if key not in _seen_seq_keys:
-                    _seen_seq_keys.add(key)
-                    for sev in seq_evs: sev["zone"], sev["corner_side"] = zone_end, e_side
-                    if not is_own and _sequence_has_shot(seq_evs) and _valid_zone_for_shot_lists(zone_end):
-                        opponent_seq_with_shot.append(seq_evs)
-
-    def _calc_defensive_stats(opp_corners, opp_shot_seqs, side_filter):
-        total_zone = Counter([c["zone"] for c in opp_corners if _valid_zone_for_shot_lists(c.get("zone"))])
-        shot_seq_ids = defaultdict(set)
-        for seq in opp_shot_seqs:
-            start = next((x for x in seq if x.get("sequenceStart")), seq[0])
-            if start.get("corner_side") == side_filter:
-                shot_seq_ids[start.get("zone")].add(start.get("sequenceId"))
-        return total_zone, shot_seq_ids, {z: (len(shot_seq_ids[z])/t)*100 for z, t in total_zone.items()}
-
-    def_left_tot, def_left_ids, def_left_pct = _calc_defensive_stats(opponent_left_side, opponent_seq_with_shot, "left")
-    def_right_tot, def_right_ids, def_right_pct = _calc_defensive_stats(opponent_right_side, opponent_seq_with_shot, "right")
-
-    def _zone_pcts(corners):
-        c = Counter(e["zone"] for e in corners if e.get("zone"))
-        tot = sum(c.values())
-        return {k: (v/tot)*100 for k,v in c.items()} if tot else {}
-
-    # Increase min_corners filter to 5 as requested
-    taker_tables = _build_corner_taker_tables(own_left_side, own_right_side, min_corners=5)
-
-    return {
-        "used_matches": used_matches,
-        "own_left_count": len(own_left_side),
-        "own_right_count": len(own_right_side),
-        "defensive": {
-            "left": (def_left_tot, def_left_ids, def_left_pct),
-            "right": (def_right_tot, def_right_ids, def_right_pct)
-        },
-        "attacking": {
-            "left_pct": _zone_pcts(own_left_side),
-            "right_pct": _zone_pcts(own_right_side)
-        },
-        "tables": taker_tables
-    }
-
-# ==========================================
-# 4. PLOTTING FUNCTIONS
-# ==========================================
-def _load_bg(file_obj):
-    return mpimg.imread(file_obj) if file_obj else np.ones((800, 1400, 3))
-
-def plot_shots_defensive(img_file, polygons, shot_pct, total_by_zone, shot_seqids_by_zone, title):
-    fig, ax = plt.subplots(figsize=(14, 10))
-    ax.imshow(_load_bg(img_file)); ax.axis("off")
-    vals = list(shot_pct.values())
-    norm = plt.Normalize(min(vals) if vals else 0, max(vals) if vals else 1)
-    cmap = cm.get_cmap("Reds")
-
-    for zone, poly in polygons.items():
-        if zone in shot_pct:
-            ax.add_patch(Polygon(poly, closed=True, facecolor=cmap(norm(shot_pct[zone])), edgecolor="none", alpha=0.55))
-            xs, ys = [p[0] for p in poly], [p[1] for p in poly]
-            cx, cy = (min(xs) + max(xs)) / 2 - 5, (min(ys) + max(ys)) / 2
-            ax.text(cx, cy, f"{len(shot_seqids_by_zone.get(zone, set()))}/{total_by_zone.get(zone, 0)}",
-                    fontsize=22, color="white", weight="bold", ha="center", va="center",
-                    path_effects=[PathEffects.withStroke(linewidth=3, foreground="black")])
-    
-    # REMOVED TITLE FROM PLOT TO AVOID DUPLICATION
-    # ax.set_title(title, fontsize=24, weight="bold", y=0.9)
-    return fig
-
-def plot_percent_attacking(img_file, polygons, centers, pct_by_zone, title):
-    fig, ax = plt.subplots(figsize=(14, 10))
-    ax.imshow(_load_bg(img_file)); ax.axis("off")
-    vals = list(pct_by_zone.values())
-    norm = plt.Normalize(min(vals) if vals else 0, max(vals) if vals else 1)
-    cmap = cm.get_cmap("Reds")
-
-    for zone, poly in polygons.items():
-        if zone in pct_by_zone:
-            ax.add_patch(Polygon(poly, closed=True, facecolor=cmap(norm(pct_by_zone[zone])), edgecolor="none", alpha=0.55))
-    
-    for zone, (x, y) in centers.items():
-        if zone in pct_by_zone:
-            ax.text(x, y, f"{pct_by_zone[zone]:.1f}%", fontsize=22, color="white", weight="bold", ha="center", va="center",
-                    path_effects=[PathEffects.withStroke(linewidth=3, foreground="black")])
-    
-    # REMOVED TITLE FROM PLOT TO AVOID DUPLICATION
-    # ax.set_title(title, fontsize=26, weight="bold", y=0.82)
-    return fig
-
-def plot_bar_chart(df, title, colors, cols, ylabel="Count"):
-    fig, ax = plt.subplots(figsize=(11, 5), constrained_layout=True)
-    ax.set_title(title, fontsize=16, weight="bold")
-    
-    if df.empty:
-        ax.text(0.5, 0.5, "No Data Available", ha="center", va="center", fontsize=14)
-        return fig
-
-    labels = []
-    for _, row in df.iterrows():
-        s = "-" if pd.isna(row["s"]) or row["s"] == "" else str(int(float(row["s"])))
-        labels.append(f"{s}. {_flip_name(str(row['player_name']))}")
-
-    x = np.arange(len(labels)); width = 0.35
-    offset = -width/2
-    for col in cols:
-        vals = df[col].astype(int).to_numpy()
-        ax.bar(x + offset, vals, width=width, color=colors.get(col, "gray"), label=col)
-        offset += width
-
-    tops = df[cols].max(axis=1).astype(int).to_numpy()
-    for i, n in enumerate(df["CornersOnPitch"].astype(int)):
-        ax.text(i, tops[i] + 0.2, f"n={n}", ha="center", va="bottom", fontsize=9)
-
-    ax.set_xticks(x); ax.set_xticklabels(labels, rotation=90)
-    ax.set_ylabel(ylabel); ax.legend()
-    return fig
-
-def plot_defenders_chart(csv_path, team_name):
-    if not Path(csv_path).exists(): return None
-    df = pd.read_csv(csv_path)
-    df = df[df["team_name"] == team_name].copy()
-    if df.empty: return None
-    df = df.sort_values(["GoalsAllowed", "Faults", "CornersOnPitch"], ascending=[False, False, False]).head(15)
-    
-    fig, ax = plt.subplots(figsize=(11, 5), constrained_layout=True)
-    ax.set_title("Good and bad defenders when defending corners:", fontsize=16, weight="bold")
-    
-    labels = [f"{'-' if pd.isna(r['s']) or r['s']=='' else int(float(r['s']))}. {_flip_name(str(r['player_name']))}" for _, r in df.iterrows()]
-    x = np.arange(len(labels)); w = 0.38
-    
-    faults = df["Faults"].fillna(0).astype(int).to_numpy()
-    goals = df["GoalsAllowed"].fillna(0).astype(int).to_numpy()
-    goals = np.minimum(goals, faults)
-    fault_rest = faults - goals
-    clears = df["Good"].fillna(0).astype(int).to_numpy()
-    
-    ax.bar(x - w/2, clears, width=w, color="green", label="Clearance")
-    ax.bar(x + w/2, goals, width=w, color="darkred", label="GoalsAllowed")
-    ax.bar(x + w/2, fault_rest, width=w, bottom=goals, color="red", label="Fault")
-    
-    tops = np.maximum(clears, faults)
-    for i, n in enumerate(df["CornersOnPitch"].fillna(0).astype(int)):
-        ax.text(i, tops[i] + 0.2, f"n={n}", ha="center", va="bottom", fontsize=9)
-        
-    ax.set_xticks(x); ax.set_xticklabels(labels, rotation=90)
-    ax.set_ylabel("Count"); ax.legend()
-    return fig
-
-def plot_attacking_headers_chart(csv_path, team_name):
-    if not Path(csv_path).exists(): return None
-    df = pd.read_csv(csv_path)
-    df = df[df["team_name"] == team_name].copy()
-    if df.empty: return None
-    df = df.sort_values(["HeadGoals", "HeadShots", "CornersOnPitch"], ascending=[False, False, False]).head(15)
-    
-    fig, ax = plt.subplots(figsize=(11, 5), constrained_layout=True)
-    ax.set_title("Good headers during own attacking corners:", fontsize=16, weight="bold")
-    
-    labels = [f"{'-' if pd.isna(r['s']) or r['s']=='' else int(float(r['s']))}. {_flip_name(str(r['player_name']))}" for _, r in df.iterrows()]
-    x = np.arange(len(labels)); w = 0.38
-    
-    hs = df["HeadShots"].fillna(0).astype(int).to_numpy()
-    hg = df["HeadGoals"].fillna(0).astype(int).to_numpy()
-    
-    ax.bar(x - w/2, hs, width=w, color="gray", label="HeadShots")
-    ax.bar(x + w/2, hg, width=w, color="green", label="HeadGoals")
-    
-    tops = np.maximum(hs, hg)
-    for i, n in enumerate(df["CornersOnPitch"].fillna(0).astype(int)):
-        ax.text(i, tops[i] + 0.2, f"n={n}", ha="center", va="bottom", fontsize=9)
-        
-    ax.set_xticks(x); ax.set_xticklabels(labels, rotation=90)
-    ax.set_ylabel("Count"); ax.legend()
-    return fig
-
-# ==========================================
-# 5. VISUALIZATION CONFIG
-# ==========================================
-def get_visualization_coords():
-    def_L = {
-        "Front_Zone": [(265, 15), (640, 15), (640, 595), (265, 595)],
-        "Back_Zone": [(1292, 15), (1667, 15), (1667, 595), (1292, 595)],
-        "Short_Corner_Zone": [(0, 135), (110, 6000), (110, 575), (0, 575)],
-        "GA1": [(655, 14), (865, 14), (865, 203), (655, 203)],
-        "GA2": [(867, 14), (1080, 14), (1080, 203), (867, 203)],
-        "GA3": [(1080, 14), (1275, 14), (1275, 203), (1080, 203)],
-        "CA1": [(653, 212), (865, 212), (865, 397), (653, 397)],
-        "CA2": [(867, 212), (1080, 212), (1080, 397), (867, 397)],
-        "CA3": [(1080, 212), (1285, 212), (1285, 397), (1080, 397)],
-        "Edge_Zone": [(653, 405), (1285, 405), (1285, 776), (653, 776)],
-    }
-    def_R = {
-        "Front_Zone": def_L["Back_Zone"], "Back_Zone": def_L["Front_Zone"],
-        "Short_Corner_Zone": def_L["Short_Corner_Zone"], 
-        "GA1": def_L["GA3"], "GA2": def_L["GA2"], "GA3": def_L["GA1"],
-        "CA1": def_L["CA3"], "CA2": def_L["CA2"], "CA3": def_L["CA1"],
-        "Edge_Zone": def_L["Edge_Zone"],
-    }
-    att_L = {
-        "Front_Zone": [(218, 135), (508, 135), (508, 575), (218, 575)],
-        "Back_Zone": [(970, 135), (1260, 135), (1260, 575), (970, 575)],
-        "Short_Corner_Zone": [(30, 575), (30, 135), (218, 135), (218, 575)],
-        "GA1": [(505, 135), (660, 135), (660, 280), (505, 280)],
-        "GA2": [(660, 135), (822, 135), (822, 280), (660, 280)],
-        "GA3": [(822, 135), (970, 135), (970, 280), (822, 280)],
-        "CA1": [(505, 285), (660, 285), (660, 425), (505, 425)],
-        "CA2": [(664, 285), (822, 285), (822, 425), (664, 425)],
-        "CA3": [(972, 285), (822, 285), (822, 425), (972, 425)],
-        "Edge_Zone": [(502, 425), (960, 425), (960, 690), (502, 690)],
-    }
-    att_centers_L = {
-        "GA1": (590, 245), "GA2": (745, 250), "GA3": (900, 250),
-        "CA1": (590, 400), "CA2": (745, 400), "CA3": (900, 400),
-        "Edge_Zone": (745, 520), "Front_Zone": (350, 380),
-        "Back_Zone": (1127, 380), "Short_Corner_Zone": (130, 380),
-    }
-    att_R = {
-        "Back_Zone": [(218, 130), (508, 130), (508, 560), (218, 560)],
-        "Front_Zone": [(965, 130), (1260, 130), (1260, 560), (965, 560)],
-        "Short_Corner_Zone": [(1260, 130), (1430, 130), (1430, 560), (1260, 560)],
-        "GA3": [(510, 130), (660, 130), (660, 280), (510, 280)],
-        "GA2": [(660, 130), (812, 130), (812, 280), (660, 280)],
-        "GA1": [(812, 130), (960, 130), (960, 280), (812, 280)],
-        "CA3": [(505, 284), (660, 284), (660, 425), (505, 425)],
-        "CA2": [(660, 285), (812, 285), (812, 425), (660, 425)],
-        "CA1": [(960, 285), (812, 285), (812, 425), (960, 425)],
-        "Edge_Zone": [(505, 425), (960, 425), (960, 690), (505, 690)],
-    }
-    att_centers_R = {
-        "GA3": (590, 250), "GA2": (745, 250), "GA1": (900, 250),
-        "CA3": (590, 400), "CA2": (745, 400), "CA1": (900, 400),
-        "Edge_Zone": (745, 520), "Back_Zone": (350, 380),
-        "Front_Zone": (1120, 380), "Short_Corner_Zone": (1355, 400),
-    }
-    return {
-        "def_L": def_L, "def_R": def_R,
-        "att_L": att_L, "att_centers_L": att_centers_L,
-        "att_R": att_R, "att_centers_R": att_centers_R
-    }
+    with col2:
+        if fig_att_bars:
+            st.pyplot(fig_att_bars)
+        else:
+            st.info("No attacking header data found for this team.")

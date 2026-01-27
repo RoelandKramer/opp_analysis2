@@ -8,8 +8,6 @@ import opponent_analysis as oa
 st.set_page_config(page_title="Opponent Analysis - Set Pieces", layout="wide")
 
 DATA_PATH = "data/corner_events_all_matches.json"
-ATTACKING_CSV = "data/attacking_headers.csv"
-DEFENSIVE_CSV = "data/defensive_headers.csv"
 
 IMG_PATHS = {
     "def_L": "images/no_names_left.png",
@@ -55,9 +53,13 @@ if json_data and selected_team:
         results = get_analysis_results(json_data, selected_team)
         viz_config = oa.get_visualization_coords()
         
-        # Load the Player Bar Charts
-        fig_att_bars = oa.plot_attacking_headers_chart(ATTACKING_CSV, selected_team)
-        fig_def_bars = oa.plot_defenders_chart(DEFENSIVE_CSV, selected_team)
+        # CALCULATE TOTALS FOR BAR CHARTS
+        total_att = results['own_left_count'] + results['own_right_count']
+        total_def = results['def_left_count'] + results['def_right_count']
+        
+        # Load the Player Bar Charts with Counts
+        fig_att_bars = oa.plot_attacking_headers_chart(ATTACKING_CSV, selected_team, total_corners=total_att)
+        fig_def_bars = oa.plot_defenders_chart(DEFENSIVE_CSV, selected_team, total_corners=total_def)
 
     st.title("Opponent analysis - Set Pieces")
     st.markdown(f"**Matches Analyzed:** {results['used_matches']} | **Team:** {selected_team}")
@@ -65,7 +67,6 @@ if json_data and selected_team:
     # --- ROW 1: ATTACKING PLOTS ---
     col1, col2 = st.columns(2)
     with col1:
-        # Title updated here to include count info, removing need for chart title
         st.subheader(f"Att. Corners Left ({results['own_left_count']} corners)")
         st.pyplot(oa.plot_percent_attacking(get_img_path("att_L"), viz_config["att_L"], viz_config["att_centers_L"], results["attacking"]["left_pct"], ""))
     with col2:
@@ -86,7 +87,6 @@ if json_data and selected_team:
     st.divider()
     col1, col2 = st.columns(2)
     with col1:
-        # We manually access the counts dictionary we returned to get the total
         count_L = results['def_left_count']
         st.subheader(f"Def. Corners Left ({count_L} corners)")
         tot, ids, pcts = results["defensive"]["left"]
@@ -97,19 +97,6 @@ if json_data and selected_team:
         tot, ids, pcts = results["defensive"]["right"]
         st.pyplot(oa.plot_shots_defensive(get_img_path("def_R"), viz_config["def_R"], pcts, tot, ids, ""))
         
-    # --- ROW 4: PLAYER BAR CHARTS ---
-    st.divider()
-    st.subheader("📊 Player Stats")
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        if fig_def_bars:
-            st.pyplot(fig_def_bars)
-        else:
-            st.info("No defensive header data found for this team.")
-            
-    with col2:
-        if fig_att_bars:
-            st.pyplot(fig_att_bars)
+
         else:
             st.info("No attacking header data found for this team.")

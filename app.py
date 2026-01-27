@@ -112,12 +112,13 @@ if check_password():
         st.divider()
         col1, col2 = st.columns(2)
         with col1:
-            count_L = results['def_left_count']
-            st.subheader(f"Def. Corners Left ({count_L} corners)")
+            # Removed corner count, added explanation
+            st.subheader("Def. Corners Left: how many crosses turned into a shot?")
             tot, ids, pcts = results["defensive"]["left"]
             st.pyplot(oa.plot_shots_defensive(get_img_path("def_L"), viz_config["def_L"], pcts, tot, ids, ""))
+        
         with col2:
-            count_R = results['def_right_count']
-            st.subheader(f"Def. Corners Right ({count_R} corners)")
+            # Removed corner count, added explanation
+            st.subheader("Def. Corners Right: how many crosses turned into a shot?")
             tot, ids, pcts = results["defensive"]["right"]
             st.pyplot(oa.plot_shots_defensive(get_img_path("def_R"), viz_config["def_R"], pcts, tot, ids, ""))

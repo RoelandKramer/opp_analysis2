@@ -196,8 +196,8 @@ if check_password():
             st.pyplot(
                 oa.plot_shots_attacking_with_percentile(
                     get_img_path("att_L"),
-                    viz_config["att_L"],
-                    viz_config["att_centers_L"],
+                    viz_config["att_L"]
+                    viz_config["att_shot_centers_L"]
                     pct_z,
                     tot_z,
                     shot_z,
@@ -213,7 +213,7 @@ if check_password():
                 oa.plot_shots_attacking_with_percentile(
                     get_img_path("att_R"),
                     viz_config["att_R"],
-                    viz_config["att_centers_R"],
+                    viz_config["att_shot_centers_R"],
                     pct_z,
                     tot_z,
                     shot_z,

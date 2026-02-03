@@ -619,36 +619,47 @@ def plot_shots_attacking_with_percentile(
     total_by_zone: Counter,
     shot_by_zone: Counter,
     percentile_by_zone: Dict[str, Optional[int]],
+    min_zone_corners: int = 4,
 ):
     fig, ax = plt.subplots(figsize=(14, 10))
     ax.imshow(_load_bg(img_file))
     ax.axis("off")
 
-    vals = list(shot_pct_by_zone.values())
-    norm = plt.Normalize(min(vals) if vals else 0, max(vals) if vals else 1)
+    # Only consider zones with enough samples for coloring
+    eligible_vals = [
+        float(shot_pct_by_zone[z])
+        for z in shot_pct_by_zone
+        if int(total_by_zone.get(z, 0)) >= min_zone_corners
+    ]
+    norm = plt.Normalize(min(eligible_vals) if eligible_vals else 0, max(eligible_vals) if eligible_vals else 1)
     cmap = cm.get_cmap("Reds")
 
+    # Color only eligible zones
     for zone, poly in polygons.items():
+        tot = int(total_by_zone.get(zone, 0))
+        if tot < min_zone_corners:
+            continue
         if zone in shot_pct_by_zone:
             ax.add_patch(
                 Polygon(
                     poly,
                     closed=True,
-                    facecolor=cmap(norm(shot_pct_by_zone[zone])),
+                    facecolor=cmap(norm(float(shot_pct_by_zone[zone]))),
                     edgecolor="none",
                     alpha=0.55,
                 )
             )
 
+    # Print text only eligible zones
     for zone, (x, y) in centers.items():
         tot = int(total_by_zone.get(zone, 0))
-        if tot <= 0:
+        if tot < min_zone_corners:
             continue
+
         shots = int(shot_by_zone.get(zone, 0))
         p = percentile_by_zone.get(zone)
         p_line = f"Top {int(p)}%" if isinstance(p, int) else "Top -%"
         txt = f"{shots} / {tot}\n{p_line}\nKKD"
-
 
         ax.text(
             x,

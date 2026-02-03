@@ -449,17 +449,27 @@ def process_corner_data(json_data, selected_team_name):
         "tables": taker_tables,
     }
 
-def compute_league_attacking_corner_shot_rates(json_data: Dict[str, Any]) -> Dict[str, Dict[str, Dict[str, Dict[str, float]]]]:
+def compute_league_attacking_corner_shot_rates(
+    json_data: Dict[str, Any],
+) -> Dict[str, Dict[str, Dict[str, Dict[str, float]]]]:
     """
     Computes, for every team in the dataset, attacking corners -> shot per zone and side.
     Includes Short_Corner_Zone (as requested).
-    Returns:
+    Returns a fully picklable structure:
         stats[team][side][zone] = {"shots": int, "total": int, "pct": float}
     """
     matches = json_data.get("matches", [])
-    stats = defaultdict(lambda: defaultdict(lambda: defaultdict(lambda: {"shots": 0, "total": 0, "pct": 0.0})))
+
+    # Use only normal dicts (picklable)
+    stats: Dict[str, Dict[str, Dict[str, Dict[str, float]]]] = {}
 
     seen_corner_keys = set()
+
+    def _ensure_bucket(team: str, side: str, zone: str) -> Dict[str, float]:
+        stats.setdefault(team, {})
+        stats[team].setdefault(side, {})
+        stats[team][side].setdefault(zone, {"shots": 0, "total": 0, "pct": 0.0})
+        return stats[team][side][zone]
 
     for match in matches:
         events = match.get("corner_events", [])
@@ -510,16 +520,19 @@ def compute_league_attacking_corner_shot_rates(json_data: Dict[str, Any]) -> Dic
             if seq_id:
                 seq_has_shot = _sequence_has_shot(sequences_by_id.get(seq_id, []))
 
-            stats[team][side][zone_end]["total"] += 1
+            bucket = _ensure_bucket(team, side, zone_end)
+            bucket["total"] = int(bucket["total"]) + 1
             if seq_has_shot:
-                stats[team][side][zone_end]["shots"] += 1
+                bucket["shots"] = int(bucket["shots"]) + 1
 
-    # finalize pct
+    # finalize pct (ensure built-in types)
     for team, side_map in stats.items():
         for side, zone_map in side_map.items():
             for zone, d in zone_map.items():
-                total = d["total"]
-                shots = d["shots"]
+                total = int(d.get("total", 0))
+                shots = int(d.get("shots", 0))
+                d["total"] = total
+                d["shots"] = shots
                 d["pct"] = (shots / total) * 100.0 if total > 0 else 0.0
 
     return stats

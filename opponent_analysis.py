@@ -665,7 +665,7 @@ def plot_shots_attacking_with_percentile(
             x,
             y,
             txt,
-            fontsize=18,
+            fontsize=16,
             color="white",
             weight="bold",
             ha="center",

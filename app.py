@@ -202,7 +202,7 @@ if check_password():
                 shot_z,
                 pctiles,
                 min_zone_corners=4,
-                font_size=16,
+                font_size=16
             )
             )
 

@@ -698,7 +698,7 @@ def get_visualization_coords():
     def_R = {
         "Front_Zone": def_L["Back_Zone"],
         "Back_Zone": def_L["Front_Zone"],
-        "Short_Corner_Zone": [(1230, 15), (1605, 15), (1605, 605), (1230, 605)],
+        "Short_Corner_Zone": [(1672, 15), (1922, 15), (1922, 605), (1672, 605)],
         "GA1": def_L["GA3"],
         "GA2": def_L["GA2"],
         "GA3": def_L["GA1"],

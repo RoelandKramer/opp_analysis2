@@ -619,14 +619,19 @@ def plot_shots_attacking_with_percentile(
     total_by_zone: Counter,
     shot_by_zone: Counter,
     percentile_by_zone: Dict[str, Optional[int]],
+    *,
     min_zone_corners: int = 4,
     font_size: int = 18,
 ):
+    """
+    Attacking corners -> shot per zone with KKD percentile.
+    Text position is computed from the polygon (same approach as plot_shots_defensive).
+    Zones with < min_zone_corners are not colored and no text is printed.
+    """
     fig, ax = plt.subplots(figsize=(14, 10))
     ax.imshow(_load_bg(img_file))
     ax.axis("off")
 
-    # Normalize only across eligible zones (>= min_zone_corners)
     eligible_vals = [
         float(shot_pct_by_zone[z])
         for z in shot_pct_by_zone
@@ -642,7 +647,6 @@ def plot_shots_attacking_with_percentile(
         if zone not in shot_pct_by_zone:
             continue
 
-        # Color fill
         ax.add_patch(
             Polygon(
                 poly,
@@ -653,7 +657,6 @@ def plot_shots_attacking_with_percentile(
             )
         )
 
-        # Center text exactly like defensive plots
         xs, ys = [p[0] for p in poly], [p[1] for p in poly]
         cx, cy = (min(xs) + max(xs)) / 2 - 5, (min(ys) + max(ys)) / 2
 

@@ -1411,6 +1411,176 @@ def build_defending_corners_player_table(
     return out.sort_values(["CornersOnPitch", "Faults", "GoalsAllowed", "Clearances"], ascending=[False, False, False, False]).reset_index(drop=True)
 
 
+
+def plot_defending_corner_players_diverging(
+    def_tbl: pd.DataFrame,
+    *,
+    max_players: int = 15,
+    title: str = "Defending corner players",
+):
+    """
+    Diverging horizontal bar chart:
+      - Center line at 0
+      - Left: Faults (red), with the 'faults that led to a goal' in black
+      - Right: Clearances (green)
+      - Sorted high->low by (Faults + Clearances)
+    Expects columns: player_name, Faults, GoalsAllowed, Clearances
+    """
+    if def_tbl is None or def_tbl.empty:
+        fig, ax = plt.subplots(figsize=(8, 3))
+        ax.text(0.5, 0.5, "No data", ha="center", va="center")
+        ax.axis("off")
+        return fig
+
+    df = def_tbl.copy()
+
+    # Ensure numeric + safe
+    for c in ("Faults", "GoalsAllowed", "Clearances"):
+        if c not in df.columns:
+            df[c] = 0
+        df[c] = pd.to_numeric(df[c], errors="coerce").fillna(0).astype(int)
+
+    if "player_name" not in df.columns:
+        df["player_name"] = "Unknown"
+
+    # Clamp: goalsAllowed cannot exceed faults
+    df["GoalsAllowed"] = np.minimum(df["GoalsAllowed"], df["Faults"])
+    df["Faults_non_goal"] = np.maximum(df["Faults"] - df["GoalsAllowed"], 0)
+
+    # Sort by sum of faults + clearances
+    df["Total"] = df["Faults"] + df["Clearances"]
+    df = df.sort_values(["Total", "Faults", "Clearances"], ascending=[False, False, False]).head(max_players)
+
+    # Plot order (top = largest)
+    df = df.iloc[::-1].reset_index(drop=True)
+
+    y = np.arange(len(df))
+    names = df["player_name"].astype(str).tolist()
+
+    faults_goal = df["GoalsAllowed"].to_numpy()
+    faults_non_goal = df["Faults_non_goal"].to_numpy()
+    clearances = df["Clearances"].to_numpy()
+
+    fig_h = max(3.5, 0.45 * len(df) + 1.2)
+    fig, ax = plt.subplots(figsize=(10, fig_h))
+
+    # Left side (negative): first black (goal faults), then red (remaining faults)
+    ax.barh(y, -faults_goal, color="black", label="Faults that led to goal")
+    ax.barh(y, -faults_non_goal, left=-faults_goal, color="red", label="Faults")
+
+    # Right side (positive): green clearances
+    ax.barh(y, clearances, color="green", label="Clearances")
+
+    # Center line
+    ax.axvline(0, linewidth=1)
+
+    ax.set_yticks(y)
+    ax.set_yticklabels(names)
+    ax.set_title(title)
+
+    # Symmetric-ish x limits
+    left_max = (faults_goal + faults_non_goal).max() if len(df) else 1
+    right_max = clearances.max() if len(df) else 1
+    lim = max(left_max, right_max, 1)
+    ax.set_xlim(-lim * 1.15, lim * 1.15)
+
+    # Cleaner look
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
+
+    # Optional: show counts at bar ends
+    for i in range(len(df)):
+        f = int(df.loc[i, "Faults"])
+        g = int(df.loc[i, "GoalsAllowed"])
+        c = int(df.loc[i, "Clearances"])
+        # left label (faults)
+        if f > 0:
+            ax.text(-f - 0.05, y[i], f"{f}", va="center", ha="right", fontsize=9)
+        # right label (clearances)
+        if c > 0:
+            ax.text(c + 0.05, y[i], f"{c}", va="center", ha="left", fontsize=9)
+        # small goal number inside black if any
+        if g > 0:
+            ax.text(-g / 2, y[i], f"{g}", va="center", ha="center", fontsize=9, color="white")
+
+    ax.legend(loc="lower right")
+    fig.tight_layout()
+    return fig
+
+
+def plot_attacking_corner_players_headers(
+    att_tbl: pd.DataFrame,
+    *,
+    max_players: int = 15,
+    title: str = "Attacking corner players (Headers & Header goals)",
+):
+    """
+    Horizontal stacked bars to the right:
+      - Darkgreen: goals from headers (HeadGoals)
+      - Green: remaining headers (Headshots - HeadGoals)
+    Sorted high->low by Headshots (then HeadGoals).
+    Expects columns: player_name, Headshots, HeadGoals
+    """
+    if att_tbl is None or att_tbl.empty:
+        fig, ax = plt.subplots(figsize=(8, 3))
+        ax.text(0.5, 0.5, "No data", ha="center", va="center")
+        ax.axis("off")
+        return fig
+
+    df = att_tbl.copy()
+
+    for c in ("Headshots", "HeadGoals"):
+        if c not in df.columns:
+            df[c] = 0
+        df[c] = pd.to_numeric(df[c], errors="coerce").fillna(0).astype(int)
+
+    if "player_name" not in df.columns:
+        df["player_name"] = "Unknown"
+
+    # Clamp goals <= headers
+    df["HeadGoals"] = np.minimum(df["HeadGoals"], df["Headshots"])
+    df["Headers_non_goal"] = np.maximum(df["Headshots"] - df["HeadGoals"], 0)
+
+    # Sort
+    df = df.sort_values(["Headshots", "HeadGoals"], ascending=[False, False]).head(max_players)
+    df = df.iloc[::-1].reset_index(drop=True)
+
+    y = np.arange(len(df))
+    names = df["player_name"].astype(str).tolist()
+
+    goals = df["HeadGoals"].to_numpy()
+    rest = df["Headers_non_goal"].to_numpy()
+    total_headers = df["Headshots"].to_numpy()
+
+    fig_h = max(3.5, 0.45 * len(df) + 1.2)
+    fig, ax = plt.subplots(figsize=(10, fig_h))
+
+    # Darkgreen goals first, then green remainder (stacked)
+    ax.barh(y, goals, color="darkgreen", label="Header goals")
+    ax.barh(y, rest, left=goals, color="green", label="Headers")
+
+    ax.set_yticks(y)
+    ax.set_yticklabels(names)
+    ax.set_title(title)
+
+    max_x = max(int(total_headers.max()) if len(df) else 1, 1)
+    ax.set_xlim(0, max_x * 1.15)
+
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
+
+    # Labels at bar ends
+    for i in range(len(df)):
+        th = int(total_headers[i])
+        g = int(goals[i])
+        if th > 0:
+            ax.text(th + 0.05, y[i], f"{th}", va="center", ha="left", fontsize=9)
+        if g > 0:
+            ax.text(g / 2, y[i], f"{g}", va="center", ha="center", fontsize=9, color="white")
+
+    ax.legend(loc="lower right")
+    fig.tight_layout()
+    return fig
 # ============================================================
 # 9) OPTIONAL: paths container
 # ============================================================

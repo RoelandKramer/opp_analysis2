@@ -1,20 +1,182 @@
 # ============================================================
 # file: app.py
 # ============================================================
+from __future__ import annotations
+
+import base64
 import os
-from datetime import datetime
+import re
+from dataclasses import dataclass
+from typing import Dict, Optional, Tuple
 
 import pandas as pd
 import streamlit as st
 
 import opp_analysis_new as oa
 
+# IMPORTANT: Must be the first Streamlit call.
+st.set_page_config(page_title="Opponent Analysis - Set Pieces", layout="wide")
 
-# --- 1. PASSWORD CHECK FUNCTION ---
-def check_password():
-    """Returns `True` if the user had the correct password."""
 
-    def password_entered():
+@dataclass(frozen=True)
+class TeamTheme:
+    top_hex: str
+    rest_hex: str
+    logo_relpath: str  # e.g. "logos/ado_den_haag.png"
+
+
+def slugify(name: str) -> str:
+    s = name.lower().strip()
+    s = re.sub(r"[^\w\s-]", "", s)
+    s = re.sub(r"[\s_-]+", "_", s)
+    return s
+
+
+def build_team_themes() -> Dict[str, TeamTheme]:
+    return {
+        # ADO
+        "ADO Den Haag": TeamTheme("#00802C", "#FFE200", "logos/ado_den_haag.png"),
+        # Red/White clubs
+        "Almere City FC": TeamTheme("#E3001B", "#FFFFFF", "logos/almere_city_fc.png"),
+        "FC Dordrecht": TeamTheme("#D2232A", "#FFFFFF", "logos/fc_dordrecht.png"),
+        "Jong Ajax": TeamTheme("#C31F3D", "#FFFFFF", "logos/jong_ajax.png"),
+        "Jong AZ": TeamTheme("#DB0021", "#FFFFFF", "logos/jong_az.png"),
+        "Jong FC Utrecht": TeamTheme("#ED1A2F", "#FFFFFF", "logos/jong_fc_utrecht.png"),
+        "Jong PSV": TeamTheme("#E62528", "#FFFFFF", "logos/jong_psv.png"),
+        "TOP Oss": TeamTheme("#D9031F", "#FFFFFF", "logos/top_oss.png"),
+        "FC Emmen": TeamTheme("#E43B3B", "#FFFFFF", "logos/fc_emmen.png"),
+        "MVV Maastricht": TeamTheme("#FA292F", "#FEFDFB", "logos/mvv_maastricht.png"),
+        # Blue/White clubs
+        "De Graafschap": TeamTheme("#0C8CCC", "#FFFFFF", "logos/de_graafschap.png"),
+        "Eindhoven": TeamTheme("#0474BC", "#FFFFFF", "logos/eindhoven.png"),
+        "FC Den Bosch": TeamTheme("#048CD4", "#FFFFFF", "logos/fc_den_bosch.png"),
+        # Helmond
+        "Helmond Sport": TeamTheme("#000000", "#E2001A", "logos/helmond_sport.png"),
+        # RKC
+        "RKC Waalwijk": TeamTheme("#2B63B7", "#FEE816", "logos/rkc_waalwijk.png"),
+        # Yellow/Black clubs (with black on top)
+        "Roda JC Kerkrade": TeamTheme("#070E0C", "#FAC300", "logos/roda_jc_kerkrade.png"),
+        "SC Cambuur": TeamTheme("#000000", "#FFD800", "logos/sc_cambuur.png"),
+        "Vitesse": TeamTheme("#000000", "#FFD500", "logos/vitesse.png"),
+        "VVV-Venlo": TeamTheme("#12100B", "#FEE000", "logos/vvv_venlo.png"),
+        # Willem II
+        "Willem II": TeamTheme("#242C84", "#FFFFFF", "logos/willem_ii.png"),
+    }
+
+
+def read_logo_as_base64(path: str) -> Optional[str]:
+    if not path or not os.path.exists(path):
+        return None
+    with open(path, "rb") as f:
+        return base64.b64encode(f.read()).decode("utf-8")
+
+
+def apply_team_layout(team: str, matches_analyzed: Optional[int], themes: Dict[str, TeamTheme]) -> None:
+    theme = themes.get(team)
+    if not theme:
+        theme = TeamTheme("#111827", "#F8FAFC", f"logos/{slugify(team)}.png")
+
+    logo_b64 = read_logo_as_base64(theme.logo_relpath)
+    logo_html = (
+        f'<img class="team-logo" src="data:image/png;base64,{logo_b64}" alt="{team} logo" />'
+        if logo_b64
+        else ""
+    )
+
+    title_text_color = "#FFFFFF" if theme.top_hex.upper() != "#FFFFFF" else "#111827"
+    subtitle_color = "rgba(255,255,255,0.88)" if title_text_color == "#FFFFFF" else "rgba(17,24,39,0.80)"
+
+    matches_line = f"Matches analyzed: {matches_analyzed}" if matches_analyzed is not None else ""
+
+    st.markdown(
+        f"""
+        <style>
+          /* App background (main area only; sidebar unaffected) */
+          [data-testid="stAppViewContainer"] {{
+            background: {theme.rest_hex};
+          }}
+          [data-testid="stHeader"] {{
+            background: transparent;
+          }}
+          header {{
+            background: transparent !important;
+          }}
+
+          /* Optional: make default block background transparent to show the page bg */
+          div.block-container {{
+            padding-top: 1.1rem;
+          }}
+          [data-testid="stVerticalBlock"] > [data-testid="stVerticalBlockBorderWrapper"] {{
+            background: transparent;
+          }}
+
+          .team-banner {{
+            position: relative;
+            width: 100%;
+            border-radius: 18px;
+            overflow: hidden;
+            margin: 0.15rem 0 1.25rem 0;
+            box-shadow: 0 10px 28px rgba(0,0,0,0.14);
+          }}
+          .team-banner-top {{
+            background: {theme.top_hex};
+            padding: 1.05rem 1.2rem 0.95rem 1.2rem;
+          }}
+          .team-banner-bottom {{
+            background: rgba(255,255,255,0.18);
+            padding: 0.6rem 1.2rem;
+          }}
+          .team-title {{
+            margin: 0;
+            color: {title_text_color};
+            font-size: 1.45rem;
+            font-weight: 800;
+            letter-spacing: 0.2px;
+          }}
+          .team-subtitle {{
+            margin: 0.2rem 0 0 0;
+            color: {subtitle_color};
+            font-size: 0.95rem;
+            font-weight: 600;
+          }}
+          .team-meta {{
+            margin: 0;
+            color: {subtitle_color};
+            font-size: 0.9rem;
+            font-weight: 600;
+          }}
+          .team-logo {{
+            position: absolute;
+            top: 12px;
+            right: 14px;
+            height: 58px;
+            width: 58px;
+            object-fit: contain;
+            background: rgba(255,255,255,0.92);
+            border-radius: 14px;
+            padding: 7px;
+          }}
+        </style>
+
+        <div class="team-banner">
+          <div class="team-banner-top">
+            <p class="team-title">Opponent analysis - Set Pieces</p>
+            <p class="team-subtitle">{team}</p>
+            {logo_html}
+          </div>
+          <div class="team-banner-bottom">
+            <p class="team-meta">{matches_line}</p>
+          </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def check_password() -> bool:
+    """Returns True if the user entered the correct password."""
+
+    def password_entered() -> None:
         if st.session_state["password"] == "4444":
             st.session_state["password_correct"] = True
             del st.session_state["password"]
@@ -37,11 +199,7 @@ def check_password():
     return False
 
 
-# --- 2. MAIN APP LOGIC ---
 if check_password():
-    st.set_page_config(page_title="Opponent Analysis - Set Pieces", layout="wide")
-
-    # --- CSVs (repo paths) ---
     CORNER_EVENTS_CSV = "data/corner_events_all_matches.csv"
     EVENTS_SEQ_CSV = "data/corner_events_full_sequences.csv"
     POS_SAMPLES_CSV = "data/corner_positions_samples_from_start_to_end.csv"
@@ -53,23 +211,20 @@ if check_password():
         "att_R": "images/right_side_corner.png",
     }
 
-    def get_img_path(key: str):
+    def get_img_path(key: str) -> Optional[str]:
         path = IMG_PATHS.get(key)
         return path if path and os.path.exists(path) else None
 
-    # --- CACHED LOADING ---
     @st.cache_data
     def load_corner_jsonlike(csv_path: str):
         return oa.load_corner_events_csv_as_jsonlike(csv_path)
 
     @st.cache_data
     def load_events_sequences(csv_path: str) -> pd.DataFrame:
-        df = pd.read_csv(csv_path, low_memory=False).where(pd.notnull, None)
-        return df
+        return pd.read_csv(csv_path, low_memory=False).where(pd.notnull, None)
 
     @st.cache_data
     def load_positions_index(csv_path: str):
-        # returns (pos_df_norm, pos_times, pos_frames)
         return oa.load_positions_samples_for_tables(csv_path)
 
     @st.cache_data
@@ -77,7 +232,7 @@ if check_password():
         return oa.extract_all_teams(json_data)
 
     @st.cache_data
-    def get_analysis_results(json_data, team_name):
+    def get_analysis_results(json_data, team_name: str):
         return oa.process_corner_data(json_data, team_name)
 
     @st.cache_data
@@ -100,7 +255,6 @@ if check_password():
         )
         return att_tbl, def_tbl
 
-    # --- SIDEBAR ---
     st.sidebar.header("Configuration")
 
     if not os.path.exists(CORNER_EVENTS_CSV):
@@ -123,17 +277,18 @@ if check_password():
     else:
         st.sidebar.caption("Latest match in dataset: -")
 
-    # --- MAIN APP ---
     if json_data and selected_team:
+        themes = build_team_themes()
+
         with st.spinner(f"Analyzing {selected_team}..."):
             results = get_analysis_results(json_data, selected_team)
             viz_config = oa.get_visualization_coords()
             league_stats = get_league_stats(json_data)
 
-        st.title("Opponent analysis - Set Pieces")
+        apply_team_layout(selected_team, results.get("used_matches"), themes)
+
         st.markdown(f"**Matches Analyzed:** {results['used_matches']} | **Team:** {selected_team}")
 
-        # --- ROW 1: ATTACKING PLOTS ---
         col1, col2 = st.columns(2)
         with col1:
             st.subheader(f"Att. Corners Left ({results['own_left_count']} corners)")
@@ -156,7 +311,6 @@ if check_password():
                 )
             )
 
-        # --- ROW 1B: ATTACKING -> SHOT PER ZONE (WITH KKD PERCENTILES) ---
         col1, col2 = st.columns(2)
         with col1:
             st.subheader("How many attacking corners led to a shot? (Left Side)")
@@ -192,7 +346,6 @@ if check_password():
                 )
             )
 
-        # --- ROW 2: CORNER TAKER TABLES ---
         st.divider()
         col1, col2 = st.columns(2)
         with col1:
@@ -202,7 +355,6 @@ if check_password():
             st.markdown("##### 📋 Corner Takers (Right)")
             st.dataframe(results["tables"]["right"], use_container_width=True, hide_index=True)
 
-        # --- ROW 3: DEFENDING PLOTS ---
         st.divider()
         col1, col2 = st.columns(2)
         with col1:
@@ -231,7 +383,6 @@ if check_password():
                 )
             )
 
-        # --- ROW 4: ATTACKING + DEFENDING PLAYER TABLES (BOTTOM, SIDE-BY-SIDE) ---
         st.divider()
         st.markdown("### Corner Player Tables: Who is dangerous, and who is weak?")
 
@@ -247,14 +398,13 @@ if check_password():
                 _, pos_times, pos_frames = load_positions_index(POS_SAMPLES_CSV)
                 att_tbl, def_tbl = build_player_tables(selected_team, events_all_df, pos_times, pos_frames)
 
-            col1, col2 = st.columns(2)
-            with col1:
-                st.markdown("##### 🟦 Attacking corner players (chart)")
-                fig_att = oa.plot_attacking_corner_players_headers(att_tbl, max_players=15)
-                st.pyplot(fig_att, clear_figure=True)
-            
-            with col2:
-                st.markdown("##### 🟥 Defending corner players (chart)")
-                fig_def = oa.plot_defending_corner_players_diverging(def_tbl, max_players=15)
-                st.pyplot(fig_def, clear_figure=True)
-
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.markdown("##### 🟦 Attacking corner players (chart)")
+                    fig_att = oa.plot_attacking_corner_players_headers(att_tbl, max_players=15)
+                    st.pyplot(fig_att, clear_figure=True)
+                
+                with col2:
+                    st.markdown("##### 🟥 Defending corner players (chart)")
+                    fig_def = oa.plot_defending_corner_players_diverging(def_tbl, max_players=15)
+                    st.pyplot(fig_def, clear_figure=True)

@@ -1,20 +1,20 @@
 # ============================================================
 # file: app.py
 # ============================================================
-import streamlit as st
-import json
 import os
 from datetime import datetime
-import opponent_analysis as oa
 
+import pandas as pd
 import streamlit as st
+
+import opp_analysis_new as oa
+
 
 # --- 1. PASSWORD CHECK FUNCTION ---
 def check_password():
     """Returns `True` if the user had the correct password."""
 
     def password_entered():
-        """Checks whether a password entered by the user is correct."""
         if st.session_state["password"] == "4444":
             st.session_state["password_correct"] = True
             del st.session_state["password"]
@@ -36,73 +36,15 @@ def check_password():
 
     return False
 
-@st.cache_data
-def get_latest_match_info(json_data):
-    """
-    Returns (latest_date: datetime|None, latest_match_name: str|None).
-    Uses match_name prefix 'dd-mm-yyyy ...' when possible.
-    """
-    latest_dt = None
-    latest_name = None
-
-    for m in json_data.get("matches", []):
-        name = m.get("match_name") or ""
-        if len(name) >= 10:
-            prefix = name[:10]
-            try:
-                dt = datetime.strptime(prefix, "%d-%m-%Y")
-                if latest_dt is None or dt > latest_dt:
-                    latest_dt = dt
-                    latest_name = name
-            except Exception:
-                continue
-
-    return latest_dt, latest_name
-
-@st.cache_data
-def get_league_attacking_corner_shot_rates(json_data):
-    return oa.compute_league_attacking_corner_shot_rates(json_data)
-
-def _percentile_rank(values, value):
-    if not values:
-        return None
-    # Higher is better. Percentile = % of teams <= team_value.
-    n = len(values)
-    leq = sum(1 for v in values if v <= value)
-    return int(round((leq / n) * 100))
-
-def build_percentiles_for_team(league_stats, team_name, side, min_zone_corners: int = 4):
-    team_side = league_stats.get(team_name, {}).get(side, {})
-    percentiles = {}
-
-    for zone, d in team_side.items():
-        team_total = int(d.get("total", 0))
-        if team_total < min_zone_corners:
-            # Do not show percentile if this team has too few corners in this zone
-            continue
-
-        team_pct = float(d.get("pct", 0.0))
-
-        dist = []
-        for _, side_map in league_stats.items():
-            zd = side_map.get(side, {}).get(zone)
-            if not zd:
-                continue
-            if int(zd.get("total", 0)) < min_zone_corners:
-                continue
-            dist.append(float(zd.get("pct", 0.0)))
-
-        percentiles[zone] = _percentile_rank(dist, team_pct)
-
-    return percentiles
-
 
 # --- 2. MAIN APP LOGIC ---
 if check_password():
-    # --- CONFIGURATION ---
     st.set_page_config(page_title="Opponent Analysis - Set Pieces", layout="wide")
 
-    DATA_PATH = "data/corner_events_all_matches.json"
+    # --- CSVs (repo paths) ---
+    CORNER_EVENTS_CSV = "data/corner_events_all_matches.csv"
+    EVENTS_SEQ_CSV = "data/corner_events_full_sequences.csv"
+    POS_SAMPLES_CSV = "data/corner_positions_samples_from_start_to_end.csv"
 
     IMG_PATHS = {
         "def_L": "images/no_names_left.png",
@@ -111,13 +53,24 @@ if check_password():
         "att_R": "images/right_side_corner.png",
     }
 
+    def get_img_path(key: str):
+        path = IMG_PATHS.get(key)
+        return path if path and os.path.exists(path) else None
+
     # --- CACHED LOADING ---
     @st.cache_data
-    def load_local_data(path):
-        if not os.path.exists(path):
-            return None
-        with open(path, "r", encoding="utf-8") as f:
-            return json.load(f)
+    def load_corner_jsonlike(csv_path: str):
+        return oa.load_corner_events_csv_as_jsonlike(csv_path)
+
+    @st.cache_data
+    def load_events_sequences(csv_path: str) -> pd.DataFrame:
+        df = pd.read_csv(csv_path, low_memory=False).where(pd.notnull, None)
+        return df
+
+    @st.cache_data
+    def load_positions_index(csv_path: str):
+        # returns (pos_df_norm, pos_times, pos_frames)
+        return oa.load_positions_samples_for_tables(csv_path)
 
     @st.cache_data
     def get_team_list(json_data):
@@ -127,28 +80,46 @@ if check_password():
     def get_analysis_results(json_data, team_name):
         return oa.process_corner_data(json_data, team_name)
 
-    def get_img_path(key):
-        path = IMG_PATHS.get(key)
-        return path if path and os.path.exists(path) else None
+    @st.cache_data
+    def get_league_stats(json_data):
+        return oa.compute_league_attacking_corner_shot_rates(json_data)
+
+    @st.cache_data
+    def build_player_tables(team: str, events_df: pd.DataFrame, pos_times, pos_frames):
+        att_tbl = oa.build_attacking_corners_player_table(
+            team=team,
+            events_df=events_df,
+            pos_times=pos_times,
+            pos_frames=pos_frames,
+        )
+        def_tbl = oa.build_defending_corners_player_table(
+            team=team,
+            events_df=events_df,
+            pos_times=pos_times,
+            pos_frames=pos_frames,
+        )
+        return att_tbl, def_tbl
 
     # --- SIDEBAR ---
     st.sidebar.header("Configuration")
-    json_data = load_local_data(DATA_PATH)
 
-    if not json_data:
-        st.error(f"❌ Data file not found at: `{DATA_PATH}`")
+    if not os.path.exists(CORNER_EVENTS_CSV):
+        st.error(f"❌ Data file not found at: `{CORNER_EVENTS_CSV}`")
         st.stop()
 
+    json_data = load_corner_jsonlike(CORNER_EVENTS_CSV)
     all_teams = get_team_list(json_data)
+
+    if not all_teams:
+        st.error("❌ No teams found in dataset.")
+        st.stop()
+
     selected_team = st.sidebar.selectbox("Select team", all_teams)
 
-    # --- sidebar latest match (bottom) ---
-    latest_dt, latest_name = get_latest_match_info(json_data)
+    latest_dt, latest_name = oa.get_latest_match_info(json_data)
     st.sidebar.markdown("---")
     if latest_dt and latest_name:
-        st.sidebar.caption(
-            f"Latest match in dataset: {latest_dt.strftime('%d-%m-%Y')} — {latest_name}"
-        )
+        st.sidebar.caption(f"Latest match in dataset: {latest_dt.strftime('%d-%m-%Y')} — {latest_name}")
     else:
         st.sidebar.caption("Latest match in dataset: -")
 
@@ -157,7 +128,7 @@ if check_password():
         with st.spinner(f"Analyzing {selected_team}..."):
             results = get_analysis_results(json_data, selected_team)
             viz_config = oa.get_visualization_coords()
-            league_stats = get_league_attacking_corner_shot_rates(json_data)
+            league_stats = get_league_stats(json_data)
 
         st.title("Opponent analysis - Set Pieces")
         st.markdown(f"**Matches Analyzed:** {results['used_matches']} | **Team:** {selected_team}")
@@ -172,7 +143,6 @@ if check_password():
                     viz_config["att_L"],
                     viz_config["att_centers_L"],
                     results["attacking"]["left_pct"],
-                    "",
                 )
             )
         with col2:
@@ -183,47 +153,46 @@ if check_password():
                     viz_config["att_R"],
                     viz_config["att_centers_R"],
                     results["attacking"]["right_pct"],
-                    "",
                 )
             )
 
-        # --- NEW ROW: ATTACKING -> SHOT PER ZONE (WITH KKD PERCENTILES) ---
+        # --- ROW 1B: ATTACKING -> SHOT PER ZONE (WITH KKD PERCENTILES) ---
         col1, col2 = st.columns(2)
         with col1:
-            st.subheader("How many attacking corners let to a shot? (Left Side)")
+            st.subheader("How many attacking corners led to a shot? (Left Side)")
             tot_z, shot_z, pct_z = results["attacking_shots"]["left"]
-            pctiles = build_percentiles_for_team(league_stats, selected_team, "left")
+            pctiles = oa.build_percentiles_for_team(league_stats, selected_team, "left", min_zone_corners=4)
             st.pyplot(
                 oa.plot_shots_attacking_with_percentile(
-                get_img_path("def_L"),
-                viz_config["def_L"],
-                pct_z,
-                tot_z,
-                shot_z,
-                pctiles,
-                min_zone_corners=4,
-                font_size=16
-            )
+                    get_img_path("def_L"),
+                    viz_config["def_L"],
+                    pct_z,
+                    tot_z,
+                    shot_z,
+                    pctiles,
+                    min_zone_corners=4,
+                    font_size=16,
+                )
             )
 
         with col2:
-            st.subheader("How many attacking corners let to a shot? (Right Side)")
+            st.subheader("How many attacking corners led to a shot? (Right Side)")
             tot_z, shot_z, pct_z = results["attacking_shots"]["right"]
-            pctiles = build_percentiles_for_team(league_stats, selected_team, "right")
+            pctiles = oa.build_percentiles_for_team(league_stats, selected_team, "right", min_zone_corners=4)
             st.pyplot(
                 oa.plot_shots_attacking_with_percentile(
-                get_img_path("def_R"),
-                viz_config["def_R"],
-                pct_z,
-                tot_z,
-                shot_z,
-                pctiles,
-                min_zone_corners=4,
-                font_size=16,
-            )
+                    get_img_path("def_R"),
+                    viz_config["def_R"],
+                    pct_z,
+                    tot_z,
+                    shot_z,
+                    pctiles,
+                    min_zone_corners=4,
+                    font_size=16,
+                )
             )
 
-        # --- ROW 2: TABLES ---
+        # --- ROW 2: CORNER TAKER TABLES ---
         st.divider()
         col1, col2 = st.columns(2)
         with col1:
@@ -246,7 +215,6 @@ if check_password():
                     pcts,
                     tot,
                     ids,
-                    "",
                 )
             )
 
@@ -260,6 +228,29 @@ if check_password():
                     pcts,
                     tot,
                     ids,
-                    "",
                 )
             )
+
+        # --- ROW 4: ATTACKING + DEFENDING PLAYER TABLES (BOTTOM, SIDE-BY-SIDE) ---
+        st.divider()
+        st.markdown("### 🧩 Corner Player Tables")
+
+        missing = [p for p in (EVENTS_SEQ_CSV, POS_SAMPLES_CSV) if not os.path.exists(p)]
+        if missing:
+            st.warning(
+                "Player tables skipped because these files are missing:\n"
+                + "\n".join([f"- `{p}`" for p in missing])
+            )
+        else:
+            with st.spinner("Building player tables..."):
+                events_all_df = load_events_sequences(EVENTS_SEQ_CSV)
+                _, pos_times, pos_frames = load_positions_index(POS_SAMPLES_CSV)
+                att_tbl, def_tbl = build_player_tables(selected_team, events_all_df, pos_times, pos_frames)
+
+            col1, col2 = st.columns(2)
+            with col1:
+                st.markdown("##### 🟦 Attacking corner players")
+                st.dataframe(att_tbl, use_container_width=True, hide_index=True)
+            with col2:
+                st.markdown("##### 🟥 Defending corner players")
+                st.dataframe(def_tbl, use_container_width=True, hide_index=True)

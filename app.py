@@ -7,7 +7,7 @@ import base64
 import os
 import re
 from dataclasses import dataclass
-from typing import Dict, Optional, Tuple
+from typing import Dict, Optional
 
 import pandas as pd
 import streamlit as st
@@ -34,9 +34,7 @@ def slugify(name: str) -> str:
 
 def build_team_themes() -> Dict[str, TeamTheme]:
     return {
-        # ADO
         "ADO Den Haag": TeamTheme("#00802C", "#FFE200", "logos/ado_den_haag.png"),
-        # Red/White clubs
         "Almere City FC": TeamTheme("#E3001B", "#FFFFFF", "logos/almere_city_fc.png"),
         "FC Dordrecht": TeamTheme("#D2232A", "#FFFFFF", "logos/fc_dordrecht.png"),
         "Jong Ajax": TeamTheme("#C31F3D", "#FFFFFF", "logos/jong_ajax.png"),
@@ -46,20 +44,15 @@ def build_team_themes() -> Dict[str, TeamTheme]:
         "TOP Oss": TeamTheme("#D9031F", "#FFFFFF", "logos/top_oss.png"),
         "FC Emmen": TeamTheme("#E43B3B", "#FFFFFF", "logos/fc_emmen.png"),
         "MVV Maastricht": TeamTheme("#FA292F", "#FEFDFB", "logos/mvv_maastricht.png"),
-        # Blue/White clubs
         "De Graafschap": TeamTheme("#0C8CCC", "#FFFFFF", "logos/de_graafschap.png"),
         "Eindhoven": TeamTheme("#0474BC", "#FFFFFF", "logos/eindhoven.png"),
         "FC Den Bosch": TeamTheme("#048CD4", "#FFFFFF", "logos/fc_den_bosch.png"),
-        # Helmond
         "Helmond Sport": TeamTheme("#000000", "#E2001A", "logos/helmond_sport.png"),
-        # RKC
         "RKC Waalwijk": TeamTheme("#2B63B7", "#FEE816", "logos/rkc_waalwijk.png"),
-        # Yellow/Black clubs (with black on top)
         "Roda JC Kerkrade": TeamTheme("#070E0C", "#FAC300", "logos/roda_jc_kerkrade.png"),
         "SC Cambuur": TeamTheme("#000000", "#FFD800", "logos/sc_cambuur.png"),
         "Vitesse": TeamTheme("#000000", "#FFD500", "logos/vitesse.png"),
         "VVV-Venlo": TeamTheme("#12100B", "#FEE000", "logos/vvv_venlo.png"),
-        # Willem II
         "Willem II": TeamTheme("#242C84", "#FFFFFF", "logos/willem_ii.png"),
     }
 
@@ -72,9 +65,7 @@ def read_logo_as_base64(path: str) -> Optional[str]:
 
 
 def apply_team_layout(team: str, matches_analyzed: Optional[int], themes: Dict[str, TeamTheme]) -> None:
-    theme = themes.get(team)
-    if not theme:
-        theme = TeamTheme("#111827", "#F8FAFC", f"logos/{slugify(team)}.png")
+    theme = themes.get(team) or TeamTheme("#111827", "#F8FAFC", f"logos/{slugify(team)}.png")
 
     logo_b64 = read_logo_as_base64(theme.logo_relpath)
     logo_html = (
@@ -85,13 +76,11 @@ def apply_team_layout(team: str, matches_analyzed: Optional[int], themes: Dict[s
 
     title_text_color = "#FFFFFF" if theme.top_hex.upper() != "#FFFFFF" else "#111827"
     subtitle_color = "rgba(255,255,255,0.88)" if title_text_color == "#FFFFFF" else "rgba(17,24,39,0.80)"
-
     matches_line = f"Matches analyzed: {matches_analyzed}" if matches_analyzed is not None else ""
 
     st.markdown(
         f"""
         <style>
-          /* App background (main area only; sidebar unaffected) */
           [data-testid="stAppViewContainer"] {{
             background: {theme.rest_hex};
           }}
@@ -101,15 +90,12 @@ def apply_team_layout(team: str, matches_analyzed: Optional[int], themes: Dict[s
           header {{
             background: transparent !important;
           }}
-
-          /* Optional: make default block background transparent to show the page bg */
           div.block-container {{
             padding-top: 1.1rem;
           }}
           [data-testid="stVerticalBlock"] > [data-testid="stVerticalBlockBorderWrapper"] {{
             background: transparent;
           }}
-
           .team-banner {{
             position: relative;
             width: 100%;
@@ -328,7 +314,6 @@ if check_password():
                     font_size=16,
                 )
             )
-
         with col2:
             st.subheader("How many attacking corners led to a shot? (Right Side)")
             tot_z, shot_z, pct_z = results["attacking_shots"]["right"]
@@ -350,10 +335,10 @@ if check_password():
         col1, col2 = st.columns(2)
         with col1:
             st.markdown("##### 📋 Corner Takers (Left)")
-            st.dataframe(results["tables"]["left"], use_container_width=True, hide_index=True)
+            st.dataframe(results["tables"]["left"], width="stretch", hide_index=True)
         with col2:
             st.markdown("##### 📋 Corner Takers (Right)")
-            st.dataframe(results["tables"]["right"], use_container_width=True, hide_index=True)
+            st.dataframe(results["tables"]["right"], width="stretch", hide_index=True)
 
         st.divider()
         col1, col2 = st.columns(2)
@@ -369,7 +354,6 @@ if check_password():
                     ids,
                 )
             )
-
         with col2:
             st.subheader("Def. Corners Right: how many crosses turned into a shot?")
             tot, ids, pcts = results["defensive"]["right"]
@@ -398,13 +382,13 @@ if check_password():
                 _, pos_times, pos_frames = load_positions_index(POS_SAMPLES_CSV)
                 att_tbl, def_tbl = build_player_tables(selected_team, events_all_df, pos_times, pos_frames)
 
-                col1, col2 = st.columns(2)
-                with col1:
-                    st.markdown("##### 🟦 Attacking corner players (chart)")
-                    fig_att = oa.plot_attacking_corner_players_headers(att_tbl, max_players=15)
-                    st.pyplot(fig_att, clear_figure=True)
-                
-                with col2:
-                    st.markdown("##### 🟥 Defending corner players (chart)")
-                    fig_def = oa.plot_defending_corner_players_diverging(def_tbl, max_players=15)
-                    st.pyplot(fig_def, clear_figure=True)
+            col1, col2 = st.columns(2)
+            with col1:
+                st.markdown("##### 🟦 Attacking corner players (chart)")
+                fig_att = oa.plot_attacking_corner_players_headers(att_tbl, max_players=15)
+                st.pyplot(fig_att, clear_figure=True)
+
+            with col2:
+                st.markdown("##### 🟥 Defending corner players (chart)")
+                fig_def = oa.plot_defending_corner_players_diverging(def_tbl, max_players=15)
+                st.pyplot(fig_def, clear_figure=True)

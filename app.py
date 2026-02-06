@@ -249,8 +249,12 @@ if check_password():
 
             col1, col2 = st.columns(2)
             with col1:
-                st.markdown("##### 🟦 Attacking corner players")
-                st.dataframe(att_tbl, use_container_width=True, hide_index=True)
+                st.markdown("##### 🟦 Attacking corner players (chart)")
+                fig_att = oa.plot_attacking_corner_players_headers(att_tbl, max_players=15)
+                st.pyplot(fig_att, clear_figure=True)
+            
             with col2:
-                st.markdown("##### 🟥 Defending corner players")
-                st.dataframe(def_tbl, use_container_width=True, hide_index=True)
+                st.markdown("##### 🟥 Defending corner players (chart)")
+                fig_def = oa.plot_defending_corner_players_diverging(def_tbl, max_players=15)
+                st.pyplot(fig_def, clear_figure=True)
+

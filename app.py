@@ -18,6 +18,8 @@ import opp_analysis_new as oa
 # IMPORTANT: Must be the first Streamlit call.
 st.set_page_config(page_title="Opponent Analysis - Set Pieces", layout="wide")
 
+APP_BG = "#FFFFFF"
+
 
 # --- 1) PASSWORD CHECK FUNCTION ---
 def check_password() -> bool:
@@ -46,12 +48,12 @@ def check_password() -> bool:
     return False
 
 
-# --- 2) THEME / LAYOUT HELPERS ---
+# --- 2) THEME / HEADER HELPERS ---
 @dataclass(frozen=True)
 class TeamTheme:
     top_hex: str
     rest_hex: str
-    logo_relpath: str  # e.g. "logos/ado_den_haag.png"
+    logo_relpath: str
 
 
 def slugify(name: str) -> str:
@@ -101,7 +103,7 @@ def read_logo_as_base64(path: str) -> Optional[str]:
 
 
 def set_matplotlib_bg(bg_hex: str) -> None:
-    """Make matplotlib figures default to the app background color."""
+    """Keep matplotlib figures/axes background consistent with the app."""
     mpl.rcParams["figure.facecolor"] = bg_hex
     mpl.rcParams["savefig.facecolor"] = bg_hex
     mpl.rcParams["axes.facecolor"] = bg_hex
@@ -118,17 +120,15 @@ def style_fig_bg(fig, bg_hex: str):
     return fig
 
 
-def apply_team_layout(team: str, matches_analyzed: Optional[int], themes: Dict[str, TeamTheme]) -> TeamTheme:
+def apply_header(team: str, matches_analyzed: Optional[int], themes: Dict[str, TeamTheme]) -> TeamTheme:
     """
-    Applies theme CSS:
-      - main background (rest_hex)
-      - sidebar background (top_hex)
-      - large top banner (top_hex)
-    Returns chosen theme to reuse for chart backgrounds.
+    App background stays white. Only the header banner is themed.
+    Also renders a fixed footer bar using team top color.
+    Places "Matches Analyzed: X | Team: Y" inside the bottom strip (black text).
     """
-    theme = themes.get(team) or TeamTheme("#111827", "#F8FAFC", f"logos/{slugify(team)}.png")
+    theme = themes.get(team) or TeamTheme("#111827", "#FFFFFF", f"logos/{slugify(team)}.png")
 
-    set_matplotlib_bg(theme.rest_hex)
+    set_matplotlib_bg(APP_BG)
 
     logo_b64 = read_logo_as_base64(theme.logo_relpath)
     logo_html = (
@@ -139,47 +139,32 @@ def apply_team_layout(team: str, matches_analyzed: Optional[int], themes: Dict[s
 
     title_text_color = "#FFFFFF" if theme.top_hex.upper() != "#FFFFFF" else "#111827"
     subtitle_color = "rgba(255,255,255,0.90)" if title_text_color == "#FFFFFF" else "rgba(17,24,39,0.85)"
-    matches_line = f"Matches analyzed: {matches_analyzed}" if matches_analyzed is not None else ""
+
+    matches_val = matches_analyzed if matches_analyzed is not None else "-"
+    meta_line = f"Matches Analyzed: {matches_val} | Team: {team}"
 
     st.markdown(
         f"""
         <style>
-          /* MAIN APP BG */
+          /* App background ALWAYS white */
           [data-testid="stAppViewContainer"] {{
-            background: {theme.rest_hex};
+            background: {APP_BG};
           }}
-
-          /* SIDEBAR BG */
-          [data-testid="stSidebar"] {{
-            background: {theme.top_hex};
-          }}
-          [data-testid="stSidebar"] * {{
-            color: {title_text_color};
-          }}
-          /* Sidebar widget readability */
-          [data-testid="stSidebar"] .stSelectbox div[data-baseweb="select"] > div {{
-            background: rgba(255,255,255,0.92) !important;
-            color: #111827 !important;
-          }}
-          [data-testid="stSidebar"] input {{
-            background: rgba(255,255,255,0.92) !important;
-            color: #111827 !important;
-          }}
-
-          /* Remove default top header bg */
           [data-testid="stHeader"] {{
             background: transparent;
           }}
           header {{
             background: transparent !important;
           }}
-
-          /* Let background show through */
           [data-testid="stVerticalBlock"] > [data-testid="stVerticalBlockBorderWrapper"] {{
             background: transparent;
           }}
 
-          /* BANNER */
+          /* Prevent content from being hidden behind the fixed footer bar */
+          div.block-container {{
+            padding-bottom: 28px;
+          }}
+
           .team-banner {{
             position: relative;
             width: 100%;
@@ -192,10 +177,16 @@ def apply_team_layout(team: str, matches_analyzed: Optional[int], themes: Dict[s
             background: {theme.top_hex};
             padding: 2.4rem 1.4rem 2.1rem 1.4rem;
           }}
+
+          /* Bottom strip with meta at the lower part */
           .team-banner-bottom {{
-            background: rgba(255,255,255,0.18);
-            padding: 0.9rem 1.4rem;
+            background: {theme.rest_hex};
+            padding: 0.6rem 1.4rem 0.35rem 1.4rem;
+            min-height: 54px;
+            display: flex;
+            align-items: flex-end;
           }}
+
           .team-title {{
             margin: 0;
             color: {title_text_color};
@@ -209,12 +200,15 @@ def apply_team_layout(team: str, matches_analyzed: Optional[int], themes: Dict[s
             font-size: 1.05rem;
             font-weight: 700;
           }}
+
+          /* Meta line: black */
           .team-meta {{
             margin: 0;
-            color: {subtitle_color};
-            font-size: 0.95rem;
-            font-weight: 700;
+            color: #000000;
+            font-size: 0.98rem;
+            font-weight: 800;
           }}
+
           .team-logo {{
             position: absolute;
             top: 18px;
@@ -226,6 +220,17 @@ def apply_team_layout(team: str, matches_analyzed: Optional[int], themes: Dict[s
             border-radius: 16px;
             padding: 9px;
           }}
+
+          /* Fixed footer bar in main color */
+          .team-footer-bar {{
+            position: fixed;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            height: 14px;
+            background: {theme.top_hex};
+            z-index: 9999;
+          }}
         </style>
 
         <div class="team-banner">
@@ -235,9 +240,11 @@ def apply_team_layout(team: str, matches_analyzed: Optional[int], themes: Dict[s
             {logo_html}
           </div>
           <div class="team-banner-bottom">
-            <p class="team-meta">{matches_line}</p>
+            <p class="team-meta">{meta_line}</p>
           </div>
         </div>
+
+        <div class="team-footer-bar"></div>
         """,
         unsafe_allow_html=True,
     )
@@ -247,7 +254,6 @@ def apply_team_layout(team: str, matches_analyzed: Optional[int], themes: Dict[s
 
 # --- 3) MAIN APP LOGIC ---
 if check_password():
-    # --- CSVs (repo paths) ---
     CORNER_EVENTS_CSV = "data/corner_events_all_matches.csv"
     EVENTS_SEQ_CSV = "data/corner_events_full_sequences.csv"
     POS_SAMPLES_CSV = "data/corner_positions_samples_from_start_to_end.csv"
@@ -335,9 +341,7 @@ if check_password():
             league_stats = get_league_stats(json_data)
 
         themes = build_team_themes()
-        theme = apply_team_layout(selected_team, results.get("used_matches"), themes)
-
-        st.markdown(f"**Matches Analyzed:** {results['used_matches']} | **Team:** {selected_team}")
+        theme = apply_header(selected_team, results.get("used_matches"), themes)
 
         # --- ROW 1: ATTACKING PLOTS ---
         col1, col2 = st.columns(2)
@@ -349,7 +353,7 @@ if check_password():
                 viz_config["att_centers_L"],
                 results["attacking"]["left_pct"],
             )
-            st.pyplot(style_fig_bg(fig, theme.rest_hex))
+            st.pyplot(style_fig_bg(fig, APP_BG))
         with col2:
             st.subheader(f"Att. Corners Right ({results['own_right_count']} corners)")
             fig = oa.plot_percent_attacking(
@@ -358,7 +362,7 @@ if check_password():
                 viz_config["att_centers_R"],
                 results["attacking"]["right_pct"],
             )
-            st.pyplot(style_fig_bg(fig, theme.rest_hex))
+            st.pyplot(style_fig_bg(fig, APP_BG))
 
         # --- ROW 1B: ATTACKING -> SHOT PER ZONE (WITH KKD PERCENTILES) ---
         col1, col2 = st.columns(2)
@@ -376,7 +380,7 @@ if check_password():
                 min_zone_corners=4,
                 font_size=16,
             )
-            st.pyplot(style_fig_bg(fig, theme.rest_hex))
+            st.pyplot(style_fig_bg(fig, APP_BG))
 
         with col2:
             st.subheader("How many attacking corners led to a shot? (Right Side)")
@@ -392,7 +396,7 @@ if check_password():
                 min_zone_corners=4,
                 font_size=16,
             )
-            st.pyplot(style_fig_bg(fig, theme.rest_hex))
+            st.pyplot(style_fig_bg(fig, APP_BG))
 
         # --- ROW 2: CORNER TAKER TABLES ---
         st.divider()
@@ -417,7 +421,7 @@ if check_password():
                 tot,
                 ids,
             )
-            st.pyplot(style_fig_bg(fig, theme.rest_hex))
+            st.pyplot(style_fig_bg(fig, APP_BG))
 
         with col2:
             st.subheader("Def. Corners Right: how many crosses turned into a shot?")
@@ -429,9 +433,9 @@ if check_password():
                 tot,
                 ids,
             )
-            st.pyplot(style_fig_bg(fig, theme.rest_hex))
+            st.pyplot(style_fig_bg(fig, APP_BG))
 
-        # --- ROW 4: ATTACKING + DEFENDING PLAYER TABLES/CHARTS ---
+        # --- ROW 4: PLAYER CHARTS ---
         st.divider()
         st.markdown("### Corner Player Tables: Who is dangerous, and who is weak?")
 
@@ -451,9 +455,9 @@ if check_password():
             with col1:
                 st.markdown("##### 🟦 Attacking corner players (chart)")
                 fig_att = oa.plot_attacking_corner_players_headers(att_tbl, max_players=15)
-                st.pyplot(style_fig_bg(fig_att, theme.rest_hex), clear_figure=True)
+                st.pyplot(style_fig_bg(fig_att, APP_BG), clear_figure=True)
 
             with col2:
                 st.markdown("##### 🟥 Defending corner players (chart)")
                 fig_def = oa.plot_defending_corner_players_diverging(def_tbl, max_players=15)
-                st.pyplot(style_fig_bg(fig_def, theme.rest_hex), clear_figure=True)
+                st.pyplot(style_fig_bg(fig_def, APP_BG), clear_figure=True)

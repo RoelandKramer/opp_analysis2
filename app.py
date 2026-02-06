@@ -233,7 +233,7 @@ if check_password():
 
         # --- ROW 4: ATTACKING + DEFENDING PLAYER TABLES (BOTTOM, SIDE-BY-SIDE) ---
         st.divider()
-        st.markdown("### 🧩 Corner Player Tables")
+        st.markdown("### Corner Player Tables: Who is dangerous, and who is weak?")
 
         missing = [p for p in (EVENTS_SEQ_CSV, POS_SAMPLES_CSV) if not os.path.exists(p)]
         if missing:

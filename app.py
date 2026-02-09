@@ -437,7 +437,7 @@ if True:
 
         # --- ROW 4: PLAYER CHARTS ---
         st.divider()
-        st.markdown("### Corner Player Tables: Who is dangerous, and who is weak?")
+        st.markdown("### Attacking & Defending corner headers: Who is dangerous, and who is weak?")
 
         missing = [p for p in (EVENTS_SEQ_CSV, POS_SAMPLES_CSV) if not os.path.exists(p)]
         if missing:

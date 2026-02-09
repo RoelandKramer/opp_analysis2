@@ -23,13 +23,15 @@ APP_BG = "#FFFFFF"
 
 def check_password() -> bool:
     def password_entered() -> None:
+        st.session_state["password_attempted"] = True
         pw = st.session_state.get("password", "")
         if pw == "4444":
             st.session_state["password_correct"] = True
-            st.session_state.pop("password", None)  # safe delete
+            st.session_state.pop("password", None)  # optional: clear input
         else:
             st.session_state["password_correct"] = False
 
+    # Already authenticated this session
     if st.session_state.get("password_correct", False):
         return True
 
@@ -40,11 +42,11 @@ def check_password() -> bool:
         key="password",
     )
 
-    if "password_correct" in st.session_state and not st.session_state["password_correct"]:
+    # Show error only after a real attempt
+    if st.session_state.get("password_attempted", False) and not st.session_state.get("password_correct", False):
         st.error("😕 Password incorrect")
 
     return False
-
 
 # --- 2) THEME / HEADER HELPERS ---
 @dataclass(frozen=True)

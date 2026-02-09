@@ -21,14 +21,12 @@ st.set_page_config(page_title="Opponent Analysis - Set Pieces", layout="wide")
 APP_BG = "#FFFFFF"
 
 
-# --- 1) PASSWORD CHECK FUNCTION ---
 def check_password() -> bool:
-    """Returns True if the user had the correct password."""
-
     def password_entered() -> None:
-        if st.session_state["password"] == "4444":
+        pw = st.session_state.get("password", "")
+        if pw == "4444":
             st.session_state["password_correct"] = True
-            del st.session_state["password"]
+            st.session_state.pop("password", None)  # safe delete
         else:
             st.session_state["password_correct"] = False
 
@@ -42,7 +40,7 @@ def check_password() -> bool:
         key="password",
     )
 
-    if "password_correct" in st.session_state:
+    if "password_correct" in st.session_state and not st.session_state["password_correct"]:
         st.error("😕 Password incorrect")
 
     return False

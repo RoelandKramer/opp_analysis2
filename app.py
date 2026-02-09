@@ -253,7 +253,7 @@ def apply_header(team: str, matches_analyzed: Optional[int], themes: Dict[str, T
 
 
 # --- 3) MAIN APP LOGIC ---
-if check_password():
+if True:
     CORNER_EVENTS_CSV = "data/corner_events_all_matches.csv"
     EVENTS_SEQ_CSV = "data/corner_events_full_sequences.csv"
     POS_SAMPLES_CSV = "data/corner_positions_samples_from_start_to_end.csv"

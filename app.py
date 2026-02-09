@@ -21,32 +21,32 @@ st.set_page_config(page_title="Opponent Analysis - Set Pieces", layout="wide")
 APP_BG = "#FFFFFF"
 
 
-def check_password() -> bool:
-    def password_entered() -> None:
-        st.session_state["password_attempted"] = True
-        pw = st.session_state.get("password", "")
-        if pw == "4444":
-            st.session_state["password_correct"] = True
-            st.session_state.pop("password", None)  # optional: clear input
-        else:
-            st.session_state["password_correct"] = False
+# def check_password() -> bool:
+#     def password_entered() -> None:
+#         st.session_state["password_attempted"] = True
+#         pw = st.session_state.get("password", "")
+#         if pw == "4444":
+#             st.session_state["password_correct"] = True
+#             st.session_state.pop("password", None)  # optional: clear input
+#         else:
+#             st.session_state["password_correct"] = False
 
-    # Already authenticated this session
-    if st.session_state.get("password_correct", False):
-        return True
+#     # Already authenticated this session
+#     if st.session_state.get("password_correct", False):
+#         return True
 
-    st.text_input(
-        "Please enter the password to access the app",
-        type="password",
-        on_change=password_entered,
-        key="password",
-    )
+#     st.text_input(
+#         "Please enter the password to access the app",
+#         type="password",
+#         on_change=password_entered,
+#         key="password",
+#     )
 
-    # Show error only after a real attempt
-    if st.session_state.get("password_attempted", False) and not st.session_state.get("password_correct", False):
-        st.error("😕 Password incorrect")
+#     # Show error only after a real attempt
+#     if st.session_state.get("password_attempted", False) and not st.session_state.get("password_correct", False):
+#         st.error("😕 Password incorrect")
 
-    return False
+#     return False
 
 # --- 2) THEME / HEADER HELPERS ---
 @dataclass(frozen=True)

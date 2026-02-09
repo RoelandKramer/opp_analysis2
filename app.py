@@ -400,14 +400,12 @@ if True:
 
         # --- ROW 2: CORNER TAKER TABLES ---
         st.divider()
-        col1, col2 = st.columns(2)
-        with col1:
-            st.markdown("##### 📋 Corner Takers (Left)")
-            st.dataframe(results["tables"]["left"], width="stretch", hide_index=True)
-        with col2:
-            st.markdown("##### 📋 Corner Takers (Right)")
-            st.dataframe(results["tables"]["right"], width="stretch", hide_index=True)
-
+        
+        st.markdown("##### 📋 Corner Takers (Left)")
+        st.dataframe(results["tables"]["left"], width="stretch", hide_index=True)
+        
+        st.markdown("##### 📋 Corner Takers (Right)")
+        st.dataframe(results["tables"]["right"], width="stretch", hide_index=True)
         # --- ROW 3: DEFENDING PLOTS ---
         st.divider()
         col1, col2 = st.columns(2)

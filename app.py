@@ -404,6 +404,8 @@ if True:
         st.markdown("##### 📋 Corner Takers (Left)")
         st.dataframe(results["tables"]["left"], width="stretch", hide_index=True)
         
+        st.divider()
+
         st.markdown("##### 📋 Corner Takers (Right)")
         st.dataframe(results["tables"]["right"], width="stretch", hide_index=True)
         # --- ROW 3: DEFENDING PLOTS ---

@@ -107,7 +107,7 @@ def apply_header(
     team: str,
     matches_analyzed: Optional[int],
     themes: Dict[str, TeamTheme],
-    window_label: str = "All",
+    window_label: str = "Full Season",
 ) -> TeamTheme:
     
     theme = themes.get(team) or TeamTheme("#111827", "#FFFFFF", f"logos/{slugify(team)}.png")

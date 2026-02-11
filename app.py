@@ -103,7 +103,13 @@ def style_fig_bg(fig, bg_hex: str):
     return fig
 
 
-def apply_header(team: str, matches_analyzed: Optional[int], themes: Dict[str, TeamTheme]) -> TeamTheme:
+def apply_header(
+    team: str,
+    matches_analyzed: Optional[int],
+    themes: Dict[str, TeamTheme],
+    window_label: str = "All",
+) -> TeamTheme:
+    
     theme = themes.get(team) or TeamTheme("#111827", "#FFFFFF", f"logos/{slugify(team)}.png")
     set_matplotlib_bg(APP_BG)
 
@@ -118,7 +124,7 @@ def apply_header(team: str, matches_analyzed: Optional[int], themes: Dict[str, T
     subtitle_color = "rgba(255,255,255,0.90)" if title_text_color == "#FFFFFF" else "rgba(17,24,39,0.85)"
 
     matches_val = matches_analyzed if matches_analyzed is not None else "-"
-    meta_line = f"Matches Analyzed: {matches_val} | Team: {team}"
+    meta_line = f"Matches Analyzed: {matches_val} | Window: {window_label} | Team: {team}"
 
     st.markdown(
         f"""
@@ -301,6 +307,8 @@ n_last = st.sidebar.slider(
     value=team_total,  # default = all matches for selected team
     step=1,
 )
+window_label = "All" if n_last >= team_total else f"Last {n_last}"
+
 
 # Dataset used for analysis (this makes slider ACTUALLY work)
 team_matches_window = team_matches_sorted[:n_last]
@@ -419,7 +427,7 @@ if json_data_view and selected_team:
         viz_config = cached["viz_config"]
 
     themes = build_team_themes()
-    _ = apply_header(selected_team, results.get("used_matches"), themes)
+    _ = apply_header(selected_team, results.get("used_matches"), themes, window_label=window_label)
 
     col1, col2 = st.columns(2)
     with col1:

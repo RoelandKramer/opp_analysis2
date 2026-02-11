@@ -233,7 +233,9 @@ if not all_teams:
 selected_team = st.sidebar.selectbox("Select team", all_teams)
 
 st.sidebar.markdown("---")
-if st.sidebar.button("Show matches used"):
+show_matches_used = st.sidebar.checkbox("Show matches used", value=False)
+
+if show_matches_used:
     matches_src = json_data_view.get("matches", []) if "json_data_view" in locals() else json_data.get("matches", [])
 
     used_rows = []
@@ -241,11 +243,13 @@ if st.sidebar.button("Show matches used"):
         events = m.get("corner_events", []) or []
         if not events:
             continue
+
         teams_in_match = {
             oa.get_canonical_team(ev.get("teamName"))
             for ev in events
             if oa.get_canonical_team(ev.get("teamName"))
         }
+
         if selected_team in teams_in_match:
             used_rows.append({"match_name": m.get("match_name", "")})
 

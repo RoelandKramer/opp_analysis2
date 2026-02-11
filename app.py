@@ -226,17 +226,30 @@ st.sidebar.caption(
     else "Latest match in dataset: -"
 )
 
+
 # --- ADD DATA ---
 st.sidebar.markdown("---")
 st.sidebar.subheader("Add data")
+
+# 1) one uploader with a resettable key (so it clears visually)
+if "uploader_key" not in st.session_state:
+    st.session_state.uploader_key = 0
+
 uploaded_files = st.sidebar.file_uploader(
     "Upload SciSports JSON files (Events + Positions)",
     type=["json"],
     accept_multiple_files=True,
+    key=f"uploader_{st.session_state.uploader_key}",
 )
 
-debug = st.sidebar.checkbox("Debug: why matches are skipped?", value=False)
+# 2) one update button (disabled when no files)
+run_update = st.sidebar.button(
+    "Update database",
+    type="primary",
+    disabled=not uploaded_files,
+)
 
+# (Optional) your debug section stays OUTSIDE the sidebar button logic
 # after json_data and selected_team are set:
 if debug and json_data and selected_team:
     dbg = oa.debug_used_matches(json_data, selected_team)
@@ -245,17 +258,21 @@ if debug and json_data and selected_team:
     st.dataframe(dbg.sort_values(["reason", "corner_starts_found"], ascending=[True, True]), use_container_width=True)
 
     st.write("Summary:")
-    st.dataframe(dbg["reason"].value_counts().reset_index().rename(columns={"index": "reason", "reason": "count"}), use_container_width=True)
+    st.dataframe(
+        dbg["reason"].value_counts().reset_index().rename(columns={"index": "reason", "reason": "count"}),
+        use_container_width=True,
+    )
 
-run_update = st.sidebar.button("Update database", type="primary", disabled=not uploaded_files)
-
+# 3) handle update
 if run_update:
     uploads_root = Path("data/_uploads")
     uploads_root.mkdir(parents=True, exist_ok=True)
+
     stamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
     batch_dir = uploads_root / f"batch_{stamp}"
     batch_dir.mkdir(parents=True, exist_ok=True)
 
+    # Save uploaded files into the batch folder
     for uf in uploaded_files or []:
         (batch_dir / Path(uf.name).name).write_bytes(uf.getbuffer())
 
@@ -268,53 +285,26 @@ if run_update:
     if result.get("ok"):
         st.sidebar.success(
             "✅ Database updated. "
-            f"events_all+{result.get('added_events_all', 0)}, "
-            f"events_full+{result.get('added_events_full', 0)}, "
-            f"headers_new_rows+{result.get('headers_net_new_rows', 0)}"
+            f"events_all Δ{result.get('added_events_all', 0)}, "
+            f"events_full Δ{result.get('added_events_full', 0)}, "
+            f"headers Δ{result.get('headers_net_new_rows', 0)}\n\n"
+            f"GitHub: {result.get('github_push_msg', '')}"
         )
-        st.cache_data.clear()
-        st.rerun()
-    st.sidebar.error(f"❌ Update failed: {result.get('error', 'Unknown error')}")
 
-# --- Sidebar uploader ---
-if "uploader_key" not in st.session_state:
-    st.session_state.uploader_key = 0
+        # Delete uploaded JSONs (optional but recommended)
+        try:
+            shutil.rmtree(batch_dir, ignore_errors=True)
+        except Exception:
+            pass
 
-uploaded = st.sidebar.file_uploader(
-    "Drop SciSports JSONs here",
-    type=["json"],
-    accept_multiple_files=True,
-    key=f"uploader_{st.session_state.uploader_key}",
-)
-
-# Save uploaded files to uploads_dir
-if uploaded:
-    for f in uploaded:
-        out_path = uploads_dir / f.name
-        out_path.parent.mkdir(parents=True, exist_ok=True)
-        out_path.write_bytes(f.getbuffer())
-
-# --- Update button ---
-if st.sidebar.button("Update database"):
-    res = update_database(uploads_dir=uploads_dir, data_dir=data_dir)
-
-    if res.get("ok"):
-        # 1) delete uploaded files so they’re gone “for real”
-        for p in uploads_dir.glob("**/*.json"):
-            try:
-                p.unlink()
-            except Exception:
-                pass
-
-        # 2) reset uploader widget so sidebar clears visually
+        # Reset uploader so files disappear visually
         st.session_state.uploader_key += 1
 
-        st.sidebar.success("Database updated ✅")
-        st.sidebar.write(res)
+        # Clear cached data so app reloads fresh CSVs
+        st.cache_data.clear()
         st.rerun()
     else:
-        st.sidebar.error(res.get("error", "Update failed"))
-
+        st.sidebar.error(f"❌ Update failed: {result.get('error', 'Unknown error')}")
 if json_data and selected_team:
     with st.spinner(f"Analyzing {selected_team}..."):
         results = get_analysis_results(json_data, selected_team)

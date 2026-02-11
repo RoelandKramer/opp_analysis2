@@ -1460,8 +1460,8 @@ def plot_defending_corner_players_diverging(
     fig, ax = plt.subplots(figsize=(10, fig_h))
 
     # Left side (negative): first black (goal faults), then red (remaining faults)
-    ax.barh(y, -faults_goal, color="black", label="Faults that led to goal")
-    ax.barh(y, -faults_non_goal, left=-faults_goal, color="red", label="Faults")
+    ax.barh(y, -faults_goal, color="black", label="Player they marked scored from corner")
+    ax.barh(y, -faults_non_goal, left=-faults_goal, color="red", label="Player they marked shot from corner")
 
     # Right side (positive): green clearances
     ax.barh(y, clearances, color="green", label="Clearances")

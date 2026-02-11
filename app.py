@@ -198,13 +198,6 @@ def get_league_stats(json_data):
     return oa.compute_league_attacking_corner_shot_rates(json_data)
 
 
-@st.cache_data
-def build_header_player_tables(team: str, headers_df: pd.DataFrame):
-    att_tbl = oa.build_attacking_headers_player_table(team=team, headers_df=headers_df)
-    def_tbl = oa.build_defending_headers_player_table(team=team, headers_df=headers_df)
-    return att_tbl, def_tbl
-
-
 st.sidebar.header("Configuration")
 
 if not os.path.exists(CORNER_EVENTS_CSV):
@@ -352,17 +345,27 @@ if json_data and selected_team:
     if not os.path.exists(HEADERS_CSV):
         st.warning(f"Player charts skipped because `{HEADERS_CSV}` is missing.")
     else:
-        with st.spinner("Building player header tables from corner_positions_headers.csv..."):
+        with st.spinner("Loading corner_positions_headers.csv..."):
             headers_df = load_headers(HEADERS_CSV)
-            att_tbl, def_tbl = build_header_player_tables(selected_team, headers_df)
+
+            # Filter to selected team (club column)
+            team_c = oa._canon_team(selected_team) or selected_team
+            df_team = headers_df.copy()
+            if "club" in df_team.columns:
+                df_team["__club_c"] = df_team["club"].apply(oa._canon_team)
+                df_team = df_team[df_team["__club_c"] == team_c].copy()
+            else:
+                df_team = df_team.iloc[0:0].copy()
 
         col1, col2 = st.columns(2)
         with col1:
             st.markdown("##### 🟦 Attacking corner players (chart)")
-            fig_att = oa.plot_attacking_corner_players_headers(att_tbl, max_players=15)
+            fig_att = oa.plot_attacking_corner_players_headers(df_team, max_players=15)
             st.pyplot(style_fig_bg(fig_att, APP_BG), clear_figure=True)
+
         with col2:
             st.markdown("##### 🟥 Defending corner players (chart)")
-            fig_def = oa.plot_defending_corner_players_diverging(def_tbl, max_players=15)
+            fig_def = oa.plot_defending_corner_players_diverging(df_team, max_players=15)
             st.pyplot(style_fig_bg(fig_def, APP_BG), clear_figure=True)
+
 

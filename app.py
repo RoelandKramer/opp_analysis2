@@ -209,7 +209,6 @@ def get_league_stats(json_data):
 
 # ---------------- Sidebar ----------------
 st.sidebar.header("Configuration")
-debug = st.sidebar.checkbox("Debug", value=False)
 
 if not os.path.exists(CORNER_EVENTS_CSV):
     st.error(f"❌ Data file not found at: `{CORNER_EVENTS_CSV}`")

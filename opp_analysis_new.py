@@ -50,6 +50,32 @@ def _safe_int(x: Any, default: int = -1) -> int:
     except Exception:
         return default
 
+def filter_last_n_matches(json_data: Dict[str, Any], n_last: Optional[int]) -> Dict[str, Any]:
+    """
+    Return json_data with only the last n_last matches (by match_date).
+    If n_last is None or >= number of dated matches -> returns original json_data.
+    Matches without a date are kept at the end (older).
+    """
+    matches = list(json_data.get("matches", []) or [])
+    if not matches:
+        return {"matches": []}
+
+    def _dt(m):
+        dt = m.get("match_date")
+        return dt if isinstance(dt, datetime) else None
+
+    dated = [m for m in matches if _dt(m) is not None]
+    undated = [m for m in matches if _dt(m) is None]
+
+    dated.sort(key=lambda m: _dt(m))  # oldest -> newest
+
+    ordered = dated + undated  # undated treated as oldest-ish
+    if not n_last or n_last >= len(ordered):
+        return {"matches": ordered}
+
+    return {"matches": ordered[-int(n_last):]}
+
+
 
 def _safe_float(x: Any) -> Optional[float]:
     try:

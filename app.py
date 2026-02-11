@@ -4,20 +4,19 @@
 from __future__ import annotations
 
 import base64
+import io
 import os
 import re
 import shutil
+import zipfile
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict, Optional, Tuple, List
 
 import matplotlib as mpl
 import pandas as pd
 import streamlit as st
-import io
-import zipfile
-import shutil
 
 import opp_analysis_new as oa
 import update_database as upd
@@ -30,11 +29,14 @@ if "GITHUB_REPO" in st.secrets:
 os.environ["GITHUB_BRANCH"] = st.secrets.get("GITHUB_BRANCH", "main")
 
 st.set_page_config(page_title="Opponent Analysis - Set Pieces", layout="wide")
+
+# Versioning so cache invalidates after DB update
 if "dataset_version" not in st.session_state:
     st.session_state.dataset_version = 0
 
+# Session cache so uploading files doesn’t recompute analysis
 if "analysis_cache" not in st.session_state:
-    st.session_state.analysis_cache = {}  # key: (dataset_version, team) -> results dict
+    st.session_state.analysis_cache = {}  # key: (dataset_version, team, n_last) -> dict
 
 APP_BG = "#FFFFFF"
 
@@ -201,7 +203,6 @@ def load_headers(csv_path: str) -> pd.DataFrame:
 
 @st.cache_data
 def get_team_list(json_data):
-    # IMPORTANT: team list should come from full dataset (not match-window filtered)
     return oa.extract_all_teams(json_data)
 
 
@@ -213,6 +214,54 @@ def get_analysis_results(json_data, team_name: str):
 @st.cache_data
 def get_league_stats(json_data):
     return oa.compute_league_attacking_corner_shot_rates(json_data)
+
+
+def _match_has_team(match: dict, team_canon: str) -> bool:
+    events = match.get("corner_events", []) or []
+    if not events:
+        return False
+    teams_in_match = {
+        oa.get_canonical_team(ev.get("teamName"))
+        for ev in events
+        if oa.get_canonical_team(ev.get("teamName"))
+    }
+    return team_canon in teams_in_match
+
+
+def _match_dt(match: dict) -> datetime:
+    dt = match.get("match_date")
+    return dt if isinstance(dt, datetime) else datetime.min
+
+
+def _save_uploads_to_batch(uploaded_files, batch_dir: Path) -> int:
+    """
+    Saves JSONs directly. If ZIPs are uploaded, extracts JSONs inside.
+    Returns number of JSON files written.
+    """
+    json_count = 0
+    for uf in uploaded_files or []:
+        name = Path(uf.name).name
+        suffix = Path(name).suffix.lower()
+
+        if suffix == ".json":
+            out = batch_dir / name
+            out.write_bytes(uf.getbuffer())
+            json_count += 1
+
+        elif suffix == ".zip":
+            zbytes = io.BytesIO(uf.getbuffer())
+            with zipfile.ZipFile(zbytes) as z:
+                for member in z.infolist():
+                    if member.is_dir():
+                        continue
+                    mname = Path(member.filename).name
+                    if not mname.lower().endswith(".json"):
+                        continue
+                    out = batch_dir / mname
+                    out.write_bytes(z.read(member))
+                    json_count += 1
+
+    return json_count
 
 
 # ---------------- Sidebar ----------------
@@ -232,47 +281,40 @@ if not all_teams:
 
 selected_team = st.sidebar.selectbox("Select team", all_teams)
 
-st.sidebar.markdown("---")
-show_matches_used = st.sidebar.checkbox("Show matches used", value=False)
+# Build team-only matches sorted most recent -> oldest
+matches_full = json_data_full.get("matches", []) or []
+team_matches_sorted = sorted(
+    [m for m in matches_full if _match_has_team(m, selected_team)],
+    key=_match_dt,
+    reverse=True,
+)
 
-if show_matches_used:
-    matches_src = json_data_full.get("matches", []) if "json_data_full" in locals() else json_data_view.get("matches", [])
-
-    used_rows = []
-    for m in matches_src:
-        events = m.get("corner_events", []) or []
-        if not events:
-            continue
-
-        teams_in_match = {
-            oa.get_canonical_team(ev.get("teamName"))
-            for ev in events
-            if oa.get_canonical_team(ev.get("teamName"))
-        }
-
-        if selected_team in teams_in_match:
-            used_rows.append({"match_name": m.get("match_name", "")})
-
-    df_used = pd.DataFrame(used_rows).dropna()
-    st.sidebar.write(f"Matches used: {len(df_used)}")
-    st.sidebar.dataframe(df_used[["match_name"]], use_container_width=True, hide_index=True)
-
-# Slider = last X matches, BUT only for selected team
-team_matches_all = oa.filter_last_n_matches_for_team(json_data_full, selected_team, None).get("matches", [])
-team_total = len(team_matches_all)
+team_total = len(team_matches_sorted)
+if team_total == 0:
+    st.warning("No matches found for this team in the dataset.")
+    st.stop()
 
 n_last = st.sidebar.slider(
     "Analyze last X matches (selected team only)",
     min_value=1,
-    max_value=max(team_total, 1),
-    value=max(team_total, 1),  # default = all matches for that team
+    max_value=team_total,
+    value=team_total,  # default = all matches for selected team
     step=1,
-    disabled=(team_total == 0),
 )
 
-json_data_view = oa.filter_last_n_matches_for_team(json_data_full, selected_team, n_last)
+# Dataset used for analysis (this makes slider ACTUALLY work)
+team_matches_window = team_matches_sorted[:n_last]
+json_data_view = {"matches": team_matches_window}
 
-# Latest match caption should reflect full dataset
+# Checkbox: show matches used (match_name only), sorted most recent first
+st.sidebar.markdown("---")
+show_matches_used = st.sidebar.checkbox("Show matches used", value=False)
+if show_matches_used:
+    df_used = pd.DataFrame([{"match_name": m.get("match_name", "")} for m in team_matches_window])
+    st.sidebar.write(f"Matches used: {len(df_used)}")
+    st.sidebar.dataframe(df_used[["match_name"]], use_container_width=True, hide_index=True)
+
+# Latest match caption should reflect FULL dataset (not filtered)
 latest_dt, latest_name = oa.get_latest_match_info(json_data_full)
 st.sidebar.markdown("---")
 st.sidebar.caption(
@@ -280,6 +322,7 @@ st.sidebar.caption(
     if latest_dt and latest_name
     else "Latest match in dataset: -"
 )
+
 # --- ADD DATA ---
 st.sidebar.markdown("---")
 st.sidebar.subheader("Add data")
@@ -299,36 +342,6 @@ run_update = st.sidebar.button(
     type="primary",
     disabled=not uploaded_files,
 )
-
-def _save_uploads_to_batch(uploaded_files, batch_dir: Path) -> int:
-    """
-    Saves JSONs directly. If ZIPs are uploaded, extracts JSONs inside.
-    Returns number of JSON files written.
-    """
-    json_count = 0
-    for uf in uploaded_files or []:
-        name = Path(uf.name).name
-        suffix = Path(name).suffix.lower()
-
-        if suffix == ".json":
-            out = batch_dir / name
-            out.write_bytes(uf.getbuffer())
-            json_count += 1
-
-        elif suffix == ".zip":
-            # Extract only JSONs from zip
-            zbytes = io.BytesIO(uf.getbuffer())
-            with zipfile.ZipFile(zbytes) as z:
-                for member in z.infolist():
-                    if member.is_dir():
-                        continue
-                    mname = Path(member.filename).name
-                    if not mname.lower().endswith(".json"):
-                        continue
-                    out = batch_dir / mname
-                    out.write_bytes(z.read(member))
-                    json_count += 1
-    return json_count
 
 if run_update:
     uploads_root = Path("data/_uploads")
@@ -358,34 +371,38 @@ if run_update:
                 f"GitHub: {result.get('github_push_msg', '')}"
             )
 
-            # Clean up uploaded files folder
+            # Clean up batch folder
             try:
                 shutil.rmtree(batch_dir, ignore_errors=True)
             except Exception:
                 pass
 
-            # Reset uploader so sidebar clears visually
+            # Reset uploader so files disappear visually
             st.session_state.uploader_key += 1
 
-            # IMPORTANT: bump dataset version so analysis recomputes once
+            # Invalidate analysis cache (dataset changed)
             st.session_state.dataset_version += 1
+            st.session_state.analysis_cache = {}
 
             # Clear streamlit cache so CSV reloads
             st.cache_data.clear()
-
             st.rerun()
         else:
             st.sidebar.error(f"❌ Update failed: {result.get('error', 'Unknown error')}")
             st.sidebar.write(result)
 
 # ---------------- Main analysis ----------------
-if json_data_full and selected_team:
+if json_data_view and selected_team:
     cache_key = (st.session_state.dataset_version, selected_team, n_last)
 
     if cache_key not in st.session_state.analysis_cache:
         with st.spinner(f"Analyzing {selected_team}..."):
-            results = get_analysis_results(json_data_full, selected_team)
+            # IMPORTANT: analyze the filtered view so slider works
+            results = get_analysis_results(json_data_view, selected_team)
+
+            # Keep league stats stable (full dataset)
             league_stats = get_league_stats(json_data_full)
+
             viz_config = oa.get_visualization_coords()
 
         st.session_state.analysis_cache[cache_key] = {
@@ -505,6 +522,3 @@ if json_data_full and selected_team:
                 st.markdown("##### 🟥 Defending corner players (chart)")
                 fig_def = oa.plot_defending_corner_players_diverging(df_team, max_players=15)
                 st.pyplot(style_fig_bg(fig_def, APP_BG), clear_figure=True)
-
-
-

@@ -31,6 +31,18 @@ _DATE_DDMMYYYY = re.compile(r"^(?P<d>\d{2}-\d{2}-\d{4})")
 
 HEADER_BODY_PART_NAMES = {"HEAD"}
 
+def truthy(x: Any) -> bool:
+    if x is True:
+        return True
+    if isinstance(x, (int, float)) and x == 1:
+        return True
+    if isinstance(x, str) and x.strip().lower() in {"true", "1", "yes"}:
+        return True
+    return False
+
+def _is_true_corner_start(ev: Dict[str, Any]) -> bool:
+    # IMPORTANT: sequenceStart can be 'TRUE'/'FALSE' strings in CSV-derived dicts
+    return ev.get("possessionTypeName") == "CORNER" and truthy(ev.get("sequenceStart"))
 
 def _safe_int(x: Any, default: int = -1) -> int:
     try:
@@ -1581,6 +1593,94 @@ def plot_attacking_corner_players_headers(
     ax.legend(loc="lower right")
     fig.tight_layout()
     return fig
+
+def load_corner_positions_headers(csv_path: str) -> pd.DataFrame:
+    if not os.path.exists(csv_path):
+        raise FileNotFoundError(f"corner_positions_headers.csv not found: {csv_path}")
+    return pd.read_csv(csv_path, low_memory=False).where(pd.notnull, None)
+
+def _to_int_series(s: pd.Series) -> pd.Series:
+    return pd.to_numeric(s, errors="coerce").fillna(0).astype(int)
+
+def build_attacking_headers_player_table(*, team: str, headers_df: pd.DataFrame) -> pd.DataFrame:
+    if headers_df is None or headers_df.empty:
+        return pd.DataFrame(columns=["player_name", "CornersOnPitch", "Headshots", "HeadGoals"])
+
+    df = headers_df.copy()
+    if "club" not in df.columns:
+        return pd.DataFrame(columns=["player_name", "CornersOnPitch", "Headshots", "HeadGoals"])
+
+    team_c = _canon_team(team) or team
+    df["__club_c"] = df["club"].apply(_canon_team)
+    df = df[df["__club_c"] == team_c].copy()
+    if df.empty:
+        return pd.DataFrame(columns=["player_name", "CornersOnPitch", "Headshots", "HeadGoals"])
+
+    for col in ("Attacking_corners_on_pitch", "Attacking_corners_headed", "Attacking_corners_headed_and_scored"):
+        if col not in df.columns:
+            df[col] = 0
+        df[col] = _to_int_series(df[col])
+
+    if "player_name" not in df.columns:
+        df["player_name"] = df.get("player_id", "Unknown").astype(str)
+
+    out = (
+        df.groupby("player_name", dropna=False)[
+            ["Attacking_corners_on_pitch", "Attacking_corners_headed", "Attacking_corners_headed_and_scored"]
+        ]
+        .sum()
+        .reset_index()
+        .rename(
+            columns={
+                "Attacking_corners_on_pitch": "CornersOnPitch",
+                "Attacking_corners_headed": "Headshots",
+                "Attacking_corners_headed_and_scored": "HeadGoals",
+            }
+        )
+    )
+    out["HeadGoals"] = np.minimum(out["HeadGoals"], out["Headshots"])
+    return out.sort_values(["CornersOnPitch", "Headshots", "HeadGoals"], ascending=[False, False, False]).reset_index(drop=True)
+
+def build_defending_headers_player_table(*, team: str, headers_df: pd.DataFrame) -> pd.DataFrame:
+    if headers_df is None or headers_df.empty:
+        return pd.DataFrame(columns=["player_name", "CornersOnPitch", "Faults", "GoalsAllowed", "Clearances"])
+
+    df = headers_df.copy()
+    if "club" not in df.columns:
+        return pd.DataFrame(columns=["player_name", "CornersOnPitch", "Faults", "GoalsAllowed", "Clearances"])
+
+    team_c = _canon_team(team) or team
+    df["__club_c"] = df["club"].apply(_canon_team)
+    df = df[df["__club_c"] == team_c].copy()
+    if df.empty:
+        return pd.DataFrame(columns=["player_name", "CornersOnPitch", "Faults", "GoalsAllowed", "Clearances"])
+
+    for col in ("Defending_corners_on_pitch", "Defending_corners_errors", "Defending_corners_fatal_errors", "Defending_corners_defended"):
+        if col not in df.columns:
+            df[col] = 0
+        df[col] = _to_int_series(df[col])
+
+    if "player_name" not in df.columns:
+        df["player_name"] = df.get("player_id", "Unknown").astype(str)
+
+    out = (
+        df.groupby("player_name", dropna=False)[
+            ["Defending_corners_on_pitch", "Defending_corners_errors", "Defending_corners_fatal_errors", "Defending_corners_defended"]
+        ]
+        .sum()
+        .reset_index()
+        .rename(
+            columns={
+                "Defending_corners_on_pitch": "CornersOnPitch",
+                "Defending_corners_errors": "Faults",
+                "Defending_corners_fatal_errors": "GoalsAllowed",
+                "Defending_corners_defended": "Clearances",
+            }
+        )
+    )
+    out["GoalsAllowed"] = np.minimum(out["GoalsAllowed"], out["Faults"])
+    return out.sort_values(["CornersOnPitch", "Faults", "GoalsAllowed", "Clearances"], ascending=[False, False, False, False]).reset_index(drop=True)
+
 # ============================================================
 # 9) OPTIONAL: paths container
 # ============================================================

@@ -236,7 +236,7 @@ st.sidebar.markdown("---")
 show_matches_used = st.sidebar.checkbox("Show matches used", value=False)
 
 if show_matches_used:
-    matches_src = json_data_view.get("matches", []) if "json_data_view" in locals() else json_data.get("matches", [])
+    matches_src = json_data_full.get("matches", []) if "json_data_full" in locals() else json_data_view.get("matches", [])
 
     used_rows = []
     for m in matches_src:

@@ -20,6 +20,17 @@ _MATCH_ID_RE = re.compile(r"-\s*(\d+)\s*$")
 def match_id_from_filename(path: Path) -> Optional[str]:
     m = _MATCH_ID_RE.search(path.stem)
     return m.group(1) if m else None
+    
+def upsert_by_match_id(df: pd.DataFrame, match_id: str, new_rows: pd.DataFrame, match_id_col: str = "match_id") -> pd.DataFrame:
+    if df is None or df.empty:
+        return new_rows.copy()
+    if match_id_col not in df.columns:
+        # If structure differs, fail loudly so you notice
+        raise ValueError(f"CSV missing required column: {match_id_col}")
+
+    df_old_removed = df[df[match_id_col].astype(str) != str(match_id)].copy()
+    out = pd.concat([df_old_removed, new_rows], ignore_index=True)
+    return out
 
 
 def normalize_path(p: str | Path) -> str:
@@ -321,6 +332,108 @@ def is_defensive_clear_or_block(row: pd.Series, defending_group: str) -> bool:
         sub in {"BLOCKED_SHOT", "SHOT_BLOCKED", "CLEARANCE", "CORNER_CLEARED", "CROSS_BLOCKED", "CROSS_CLEARED"}
     )
 
+from __future__ import annotations
+
+import os
+import subprocess
+from pathlib import Path
+from typing import Any, Dict, List, Tuple
+
+import pandas as pd
+
+
+def upsert_df_by_match_id(
+    df: pd.DataFrame,
+    match_id: str,
+    new_rows: pd.DataFrame,
+    match_id_col: str = "match_id",
+) -> pd.DataFrame:
+    """
+    Replace existing rows for match_id, then append new_rows.
+    If new_rows is empty -> keep df unchanged.
+    """
+    if new_rows is None or new_rows.empty:
+        return df
+
+    match_id = str(match_id)
+
+    df = df.copy() if df is not None else pd.DataFrame()
+    if df.empty:
+        out = new_rows.copy()
+        if match_id_col in out.columns:
+            out[match_id_col] = out[match_id_col].astype(str)
+        return out
+
+    if match_id_col not in df.columns:
+        raise ValueError(f"Target DF missing '{match_id_col}' column")
+
+    df[match_id_col] = df[match_id_col].astype(str)
+
+    # drop old match
+    df = df[df[match_id_col] != match_id].copy()
+
+    # append new
+    new_rows = new_rows.copy()
+    if match_id_col in new_rows.columns:
+        new_rows[match_id_col] = new_rows[match_id_col].astype(str)
+
+    return pd.concat([df, new_rows], ignore_index=True)
+
+
+def git_commit_and_push_csvs(
+    *,
+    repo_root: Path,
+    files_to_commit: List[Path],
+    commit_message: str,
+) -> Tuple[bool, str]:
+    """
+    Commits + pushes updated CSVs to GitHub.
+
+    Requires env vars (recommended):
+      - GITHUB_TOKEN  (fine-grained PAT)
+      - GITHUB_REPO   (e.g. "yourname/yourrepo")
+      - GITHUB_BRANCH (e.g. "main")
+
+    The repo_root must be inside a git repo.
+    """
+    token = os.getenv("GITHUB_TOKEN", "").strip()
+    repo = os.getenv("GITHUB_REPO", "").strip()
+    branch = os.getenv("GITHUB_BRANCH", "main").strip()
+
+    if not token or not repo:
+        return False, "Missing GITHUB_TOKEN or GITHUB_REPO env vars"
+
+    try:
+        # Ensure we are in repo
+        repo_root = Path(repo_root).resolve()
+
+        # Configure git identity (safe defaults)
+        subprocess.check_call(["git", "-C", str(repo_root), "config", "user.email", "bot@streamlit.local"])
+        subprocess.check_call(["git", "-C", str(repo_root), "config", "user.name", "streamlit-bot"])
+
+        # Set authenticated remote URL (overwrites origin)
+        remote_url = f"https://{token}@github.com/{repo}.git"
+        subprocess.check_call(["git", "-C", str(repo_root), "remote", "set-url", "origin", remote_url])
+
+        # Checkout branch (best effort)
+        subprocess.call(["git", "-C", str(repo_root), "checkout", branch])
+
+        # Add files
+        for f in files_to_commit:
+            subprocess.check_call(["git", "-C", str(repo_root), "add", str(Path(f).resolve())])
+
+        # Commit (if nothing changed, git returns non-zero)
+        commit_rc = subprocess.call(["git", "-C", str(repo_root), "commit", "-m", commit_message])
+        if commit_rc != 0:
+            # No changes to commit
+            return True, "No changes to commit (already up to date)"
+
+        # Push
+        subprocess.check_call(["git", "-C", str(repo_root), "push", "origin", branch])
+        return True, "Pushed to GitHub"
+    except Exception as e:
+        return False, str(e)
+
 
 def update_database(*, uploads_dir: Path, data_dir: Path) -> Dict[str, Any]:
     """
@@ -329,6 +442,11 @@ def update_database(*, uploads_dir: Path, data_dir: Path) -> Dict[str, Any]:
       - data/corner_events_full_sequences.csv
       - data/corner_positions_headers.csv
     using JSONs from uploads_dir.
+
+    NEW behavior:
+      - If uploaded match_id already exists -> REPLACE that match everywhere (events + sequences + headers).
+      - If new match -> APPEND normally.
+      - After writing CSVs -> commit+push to GitHub (env vars required).
     """
     try:
         uploads_dir = Path(uploads_dir)
@@ -390,44 +508,83 @@ def update_database(*, uploads_dir: Path, data_dir: Path) -> Dict[str, Any]:
             ],
         )
 
-        # detect new files
+        # Load existing CSVs into memory (so we can UPSERT)
+        df_events_all = pd.read_csv(csv_events_all, low_memory=False).where(pd.notnull, None)
+        df_events_full = pd.read_csv(csv_events_full, low_memory=False).where(pd.notnull, None)
+        df_headers_existing = pd.read_csv(csv_headers, low_memory=False).where(pd.notnull, None)
+
+        existing_match_ids_events_all = (
+            set(df_events_all["match_id"].astype(str)) if ("match_id" in df_events_all.columns and not df_events_all.empty) else set()
+        )
+        existing_match_ids_events_full = (
+            set(df_events_full["match_id"].astype(str)) if ("match_id" in df_events_full.columns and not df_events_full.empty) else set()
+        )
+        existing_match_ids_headers = (
+            set(df_headers_existing["match_id"].astype(str)) if ("match_id" in df_headers_existing.columns and not df_headers_existing.empty) else set()
+        )
+
+        # detect uploaded files (IMPORTANT: we do NOT filter by existing, because we want to replace too)
         event_files = iter_files_recursive(uploads_dir, _EVENTS_GLOB)
         pos_files = iter_files_recursive(uploads_dir, _POSITIONS_GLOB)
 
-        existing_event_sources = load_norm_set(csv_events_all, "source_event_file")
-        existing_match_ids_events = load_set(csv_events_all, "match_id")
-        existing_pos_sources = load_norm_set(csv_headers, "source_position_file")
-
-        new_event_files: List[Path] = []
+        # Map uploaded event/pos files by match_id (choose newest if multiple)
+        ev_by_mid: Dict[str, Path] = {}
         for p in event_files:
-            if normalize_path(p) in existing_event_sources:
-                continue
             mid = match_id_from_filename(p)
-            if mid and mid in existing_match_ids_events:
+            if not mid:
+                # fallback: try reading json to find mid
+                c = read_json(p)
+                if c:
+                    mid = match_id_from_json(c)
+            if not mid:
                 continue
-            new_event_files.append(p)
+            mid = str(mid)
+            if mid not in ev_by_mid:
+                ev_by_mid[mid] = p
+            else:
+                # pick newest file
+                if p.stat().st_mtime > ev_by_mid[mid].stat().st_mtime:
+                    ev_by_mid[mid] = p
 
-        new_pos_files: List[Path] = [p for p in pos_files if normalize_path(p) not in existing_pos_sources]
-
-        # map uploaded positions by match_id (pick first if duplicates)
         pos_by_mid: Dict[str, Path] = {}
-        for p in new_pos_files:
+        for p in pos_files:
             mid = match_id_from_filename(p)
-            if mid and mid not in pos_by_mid:
+            if not mid:
+                c = read_json(p)
+                if c:
+                    mid = match_id_from_json(c)
+            if not mid:
+                continue
+            mid = str(mid)
+            if mid not in pos_by_mid:
                 pos_by_mid[mid] = p
+            else:
+                if p.stat().st_mtime > pos_by_mid[mid].stat().st_mtime:
+                    pos_by_mid[mid] = p
 
-        # 1) Append events
+        # The matches we will update are those with an uploaded events file
+        uploaded_match_ids = sorted(ev_by_mid.keys())
+
+        if not uploaded_match_ids:
+            return {"ok": True, "added_events_all": 0, "added_events_full": 0, "headers_net_new_rows": 0, "note": "No event files found"}
+
+        replaced_matches = 0
+        added_matches = 0
+
+        # 1) Build NEW rows for events_all + events_full for uploaded matches
         rows_all: List[Dict[str, Any]] = []
         rows_full: List[Dict[str, Any]] = []
 
-        for ev_path in new_event_files:
+        for mid in uploaded_match_ids:
+            ev_path = ev_by_mid[mid]
             ev_container = read_json(ev_path)
             if not ev_container:
                 continue
 
-            mid = match_id_from_filename(ev_path) or match_id_from_json(ev_container)
-            if not mid:
+            mid2 = match_id_from_filename(ev_path) or match_id_from_json(ev_container)
+            if not mid2:
                 continue
+            mid2 = str(mid2)
 
             events = get_events_list(ev_container)
             if not events:
@@ -445,7 +602,7 @@ def update_database(*, uploads_dir: Path, data_dir: Path) -> Dict[str, Any]:
                 start_row.update(
                     {
                         "match_name": mname,
-                        "match_id": str(mid),
+                        "match_id": str(mid2),
                         "source_event_file": str(ev_path),
                         "pitch_top_x": bounds["pitch_top_x"],
                         "pitch_left_y": bounds["pitch_left_y"],
@@ -458,9 +615,6 @@ def update_database(*, uploads_dir: Path, data_dir: Path) -> Dict[str, Any]:
                 )
                 rows_all.append(start_row)
 
-                # full seq events:
-                # - if seq_id != -1: include by sequenceId and window t0..t1
-                # - if seq_id == -1: include only events with startTimeMs == t0 (best-effort)
                 seq_int = safe_int(seq_id, -999999)
                 for e in events:
                     te = _event_time_ms(e)
@@ -480,7 +634,7 @@ def update_database(*, uploads_dir: Path, data_dir: Path) -> Dict[str, Any]:
                     row.update(
                         {
                             "match_name": mname,
-                            "match_id": str(mid),
+                            "match_id": str(mid2),
                             "source_event_file": str(ev_path),
                             "pitch_top_x": bounds["pitch_top_x"],
                             "pitch_left_y": bounds["pitch_left_y"],
@@ -493,40 +647,64 @@ def update_database(*, uploads_dir: Path, data_dir: Path) -> Dict[str, Any]:
                     )
                     rows_full.append(row)
 
+            # reporting
+            existed_before = (
+                (mid2 in existing_match_ids_events_all)
+                or (mid2 in existing_match_ids_events_full)
+                or (mid2 in existing_match_ids_headers)
+            )
+            if existed_before:
+                replaced_matches += 1
+            else:
+                added_matches += 1
+
         df_new_all = pd.DataFrame(rows_all)
         df_new_full = pd.DataFrame(rows_full)
 
-        # IMPORTANT: include corner_startTimeMs because seqId==-1 must not collapse
-        added_all = _dedupe_append_csv(
-            csv_events_all,
-            df_new_all,
-            key_cols=["match_id", "corner_sequence_id", "corner_startTimeMs"],
-        )
-        added_full = _dedupe_append_csv(
-            csv_events_full,
-            df_new_full,
-            key_cols=[
-                "match_id",
-                "corner_sequence_id",
-                "corner_startTimeMs",
-                "startTimeMs",
-                "playerId",
-                "baseTypeId",
-                "possessionTypeName",
-            ],
-        )
+        # If nothing parsed, stop early
+        if df_new_all.empty and df_new_full.empty:
+            return {"ok": True, "added_events_all": 0, "added_events_full": 0, "headers_net_new_rows": 0, "note": "No corners parsed"}
 
-        # 2) Update headers based on just-added matches (fast)
-        if df_new_full.empty:
-            return {
-                "ok": True,
-                "added_events_all": int(added_all),
-                "added_events_full": int(added_full),
-                "headers_net_new_rows": 0,
-            }
+        # 1b) UPSERT events by match_id (replace then append)
+        # (group-by match_id so we only drop once per match)
+        added_all_rows = 0
+        added_full_rows = 0
 
-        df_full = pd.read_csv(csv_events_full, low_memory=False).where(pd.notnull, None)
-        df_headers = pd.read_csv(csv_headers, low_memory=False).where(pd.notnull, None)
+        if not df_new_all.empty:
+            for mid, g in df_new_all.groupby("match_id", dropna=False):
+                before = len(df_events_all)
+                df_events_all = upsert_df_by_match_id(df_events_all, str(mid), g, "match_id")
+                after = len(df_events_all)
+                added_all_rows += max(after - before, 0)
+
+        if not df_new_full.empty:
+            for mid, g in df_new_full.groupby("match_id", dropna=False):
+                before = len(df_events_full)
+                df_events_full = upsert_df_by_match_id(df_events_full, str(mid), g, "match_id")
+                after = len(df_events_full)
+                added_full_rows += max(after - before, 0)
+
+        # Write events CSVs
+        df_events_all.to_csv(csv_events_all, index=False, encoding="utf-8")
+        df_events_full.to_csv(csv_events_full, index=False, encoding="utf-8")
+
+        # 2) HEADERS: recompute for uploaded matches, replacing only those match_ids (when positions exist)
+        # Load fresh from updated events_full (so headers use final data)
+        df_full = df_events_full.where(pd.notnull(df_events_full), None).copy()
+        df_headers = df_headers_existing.where(pd.notnull(df_headers_existing), None).copy()
+
+        # We will only replace headers for matches where we have an uploaded positions file
+        mids_with_pos = {mid for mid in uploaded_match_ids if str(mid) in pos_by_mid}
+        mids_without_pos = [mid for mid in uploaded_match_ids if str(mid) not in pos_by_mid]
+
+        # Drop old headers for matches we will recompute (true replace)
+        if not df_headers.empty and "match_id" in df_headers.columns and mids_with_pos:
+            df_headers["match_id"] = df_headers["match_id"].astype(str)
+            df_headers = df_headers[~df_headers["match_id"].isin({str(m) for m in mids_with_pos})].copy()
+
+        # Rebuild headers by running your existing logic, but only for those matches
+        # (We reuse your original code structure almost verbatim)
+        before_rows = len(df_headers)
 
         # index existing header rows by (match_id, player_id)
         def k_mid_pid(mid: Any, pid: Any) -> Tuple[str, str]:
@@ -612,23 +790,15 @@ def update_database(*, uploads_dir: Path, data_dir: Path) -> Dict[str, Any]:
         def add(idx: int, col: str, inc: int = 1) -> None:
             df_headers.at[idx, col] = int(df_headers.at[idx, col]) + int(inc)
 
-        # only process event files that were newly ingested
-        new_event_sources = df_new_full["source_event_file"].dropna().astype(str).unique().tolist()
         corners_processed = 0
         corners_skipped_no_pos = 0
 
-        for ev_file_str in new_event_sources:
-            ev_mid = match_id_from_filename(Path(ev_file_str))
-            if not ev_mid:
-                mids = df_full.loc[df_full["source_event_file"].astype(str) == ev_file_str, "match_id"].dropna().astype(str).unique()
-                ev_mid = mids[0] if len(mids) else None
-            if not ev_mid:
-                continue
+        # We only process matches in mids_with_pos (true replace)
+        for mid in sorted(mids_with_pos):
+            ev_path = ev_by_mid[str(mid)]
+            pos_path = pos_by_mid[str(mid)]
 
-            pos_path = pos_by_mid.get(str(ev_mid))
-            if not pos_path:
-                corners_skipped_no_pos += 1
-                continue
+            ev_file_str = str(ev_path)
 
             pos_container = read_json(pos_path)
             if not pos_container:
@@ -641,7 +811,7 @@ def update_database(*, uploads_dir: Path, data_dir: Path) -> Dict[str, Any]:
                 continue
             frame_by_t = build_frame_index(frames)
 
-            df_m = df_full[df_full["source_event_file"].astype(str) == ev_file_str].copy()
+            df_m = df_full[df_full["match_id"].astype(str) == str(mid)].copy()
             if df_m.empty:
                 continue
 
@@ -649,9 +819,6 @@ def update_database(*, uploads_dir: Path, data_dir: Path) -> Dict[str, Any]:
             df_m["__t0"] = df_m["corner_startTimeMs"].apply(lambda x: safe_int(x, -1))
             df_m = df_m[df_m["__t0"] >= 0].copy()
 
-            # build corner "units":
-            # - seq != -1: one per seq_id using earliest t0
-            # - seq == -1: one per t0
             units: List[Tuple[int, int]] = []
             non = df_m[df_m["__seq"] != -1]
             for seq_int, g in non.groupby("__seq"):
@@ -695,7 +862,6 @@ def update_database(*, uploads_dir: Path, data_dir: Path) -> Dict[str, Any]:
                 atk_players = players_from_frame(fr0, attacking_side_key)
                 def_players = players_from_frame(fr0, defending_side_key)
 
-                # on_pitch counts ONCE per unit
                 for p in atk_players:
                     pid = str(p.get("p"))
                     idx = get_or_create_row(
@@ -722,7 +888,6 @@ def update_database(*, uploads_dir: Path, data_dir: Path) -> Dict[str, Any]:
                     )
                     add(idx, "Defending_corners_on_pitch", 1)
 
-                # defended (first defensive clear/block in unit)
                 for _, r in df_seq.iterrows():
                     if is_defensive_clear_or_block(r, defending_group=defending_group):
                         dpid = r.get("playerId")
@@ -739,7 +904,6 @@ def update_database(*, uploads_dir: Path, data_dir: Path) -> Dict[str, Any]:
                             add(idx, "Defending_corners_defended", 1)
                         break
 
-                # first shot in unit => errors + headers
                 df_shots = df_seq[df_seq.apply(is_shot_event, axis=1)].copy()
                 if not df_shots.empty:
                     df_shots["__t"] = df_shots["startTimeMs"].apply(lambda x: safe_int(x, -1))
@@ -798,17 +962,32 @@ def update_database(*, uploads_dir: Path, data_dir: Path) -> Dict[str, Any]:
                                 if is_goal_event(shot_row):
                                     add(idx, "Attacking_corners_headed_and_scored", 1)
 
-        before_rows = len(pd.read_csv(csv_headers, low_memory=False)) if csv_headers.exists() else 0
         df_headers.to_csv(csv_headers, index=False, encoding="utf-8")
         after_rows = len(df_headers)
+        headers_net_new_rows = int(after_rows - before_rows)
+
+        # 3) Push to GitHub
+        # repo_root should be the git repo root. If update_database.py lives in repo, data_dir.parent is often fine.
+        repo_root = Path(".").resolve()
+        ok_push, push_msg = git_commit_and_push_csvs(
+            repo_root=repo_root,
+            files_to_commit=[csv_events_all, csv_events_full, csv_headers],
+            commit_message=f"Update database CSVs ({len(uploaded_match_ids)} match(es))",
+        )
 
         return {
             "ok": True,
-            "added_events_all": int(added_all),
-            "added_events_full": int(added_full),
-            "headers_net_new_rows": int(after_rows - before_rows),
+            "added_events_all": int(added_all_rows),
+            "added_events_full": int(added_full_rows),
+            "headers_net_new_rows": int(headers_net_new_rows),
             "corners_processed": int(corners_processed),
             "corners_skipped_no_pos": int(corners_skipped_no_pos),
+            "uploaded_matches": len(uploaded_match_ids),
+            "added_matches": int(added_matches),
+            "replaced_matches": int(replaced_matches),
+            "matches_missing_positions": mids_without_pos,
+            "github_push_ok": bool(ok_push),
+            "github_push_msg": push_msg,
         }
 
     except Exception as e:

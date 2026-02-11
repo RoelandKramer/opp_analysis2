@@ -368,4 +368,17 @@ if json_data and selected_team:
             fig_def = oa.plot_defending_corner_players_diverging(df_team, max_players=15)
             st.pyplot(style_fig_bg(fig_def, APP_BG), clear_figure=True)
 
+    
+    st.write("HEADERS_CSV rows:", headers_df.shape)
+    st.write("HEADERS_CSV columns:", list(headers_df.columns))
+    
+    if "club" in headers_df.columns:
+        st.write("Unique clubs (first 50):", sorted(headers_df["club"].dropna().astype(str).unique())[:50])
+    
+    st.write("Selected team:", selected_team)
+    st.write("Team canon:", oa._canon_team(selected_team) or selected_team)
+    
+    st.write("df_team rows:", df_team.shape)
+    st.dataframe(df_team.head(20))
+
 

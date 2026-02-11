@@ -300,7 +300,7 @@ if run_update:
 
     if result.get("ok"):
         st.sidebar.success("✅ Database updated. ")
-            st.sidebar.write(result)  # <-- add this temporarily so you see github_push_ok/msg
+        st.sidebar.write(result)  # <-- add this temporarily so you see github_push_ok/msg
        
 
         # remove batch files

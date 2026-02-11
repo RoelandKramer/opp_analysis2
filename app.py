@@ -228,6 +228,19 @@ uploaded_files = st.sidebar.file_uploader(
     type=["json"],
     accept_multiple_files=True,
 )
+
+debug = st.sidebar.checkbox("Debug: why matches are skipped?", value=False)
+
+# after json_data and selected_team are set:
+if debug and json_data and selected_team:
+    dbg = oa.debug_used_matches(json_data, selected_team)
+    st.subheader("Debug match usage")
+    st.write("If many rows show `no_true_corner_starts`, your `_is_true_corner_start` logic is rejecting corners.")
+    st.dataframe(dbg.sort_values(["reason", "corner_starts_found"], ascending=[True, True]), use_container_width=True)
+
+    st.write("Summary:")
+    st.dataframe(dbg["reason"].value_counts().reset_index().rename(columns={"index": "reason", "reason": "count"}), use_container_width=True)
+
 run_update = st.sidebar.button("Update database", type="primary", disabled=not uploaded_files)
 
 if run_update:

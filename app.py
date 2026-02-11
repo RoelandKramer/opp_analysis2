@@ -15,6 +15,9 @@ from typing import Dict, Optional
 import matplotlib as mpl
 import pandas as pd
 import streamlit as st
+import io
+import zipfile
+import shutil
 
 import opp_analysis_new as oa
 import update_database as upd
@@ -27,6 +30,11 @@ if "GITHUB_REPO" in st.secrets:
 os.environ["GITHUB_BRANCH"] = st.secrets.get("GITHUB_BRANCH", "main")
 
 st.set_page_config(page_title="Opponent Analysis - Set Pieces", layout="wide")
+if "dataset_version" not in st.session_state:
+    st.session_state.dataset_version = 0
+
+if "analysis_cache" not in st.session_state:
+    st.session_state.analysis_cache = {}  # key: (dataset_version, team) -> results dict
 
 APP_BG = "#FFFFFF"
 
@@ -224,6 +232,9 @@ if not all_teams:
 
 selected_team = st.sidebar.selectbox("Select team", all_teams)
 
+st.sidebar.markdown("---")
+show_used = st.sidebar.button("Show matches used (this team)")
+
 # Slider = last X matches, BUT only for selected team
 team_matches_all = oa.filter_last_n_matches_for_team(json_data_full, selected_team, None).get("matches", [])
 team_total = len(team_matches_all)
@@ -247,8 +258,7 @@ st.sidebar.caption(
     if latest_dt and latest_name
     else "Latest match in dataset: -"
 )
-
-# --- ADD DATA (single uploader + single button) ---
+# --- ADD DATA ---
 st.sidebar.markdown("---")
 st.sidebar.subheader("Add data")
 
@@ -256,8 +266,8 @@ if "uploader_key" not in st.session_state:
     st.session_state.uploader_key = 0
 
 uploaded_files = st.sidebar.file_uploader(
-    "Upload SciSports JSON files (Events + Positions)",
-    type=["json"],
+    "Upload SciSports files (JSON or ZIP)",
+    type=["json", "zip"],
     accept_multiple_files=True,
     key=f"uploader_{st.session_state.uploader_key}",
 )
@@ -268,7 +278,35 @@ run_update = st.sidebar.button(
     disabled=not uploaded_files,
 )
 
+def _save_uploads_to_batch(uploaded_files, batch_dir: Path) -> int:
+    """
+    Saves JSONs directly. If ZIPs are uploaded, extracts JSONs inside.
+    Returns number of JSON files written.
+    """
+    json_count = 0
+    for uf in uploaded_files or []:
+        name = Path(uf.name).name
+        suffix = Path(name).suffix.lower()
 
+        if suffix == ".json":
+            out = batch_dir / name
+            out.write_bytes(uf.getbuffer())
+            json_count += 1
+
+        elif suffix == ".zip":
+            # Extract only JSONs from zip
+            zbytes = io.BytesIO(uf.getbuffer())
+            with zipfile.ZipFile(zbytes) as z:
+                for member in z.infolist():
+                    if member.is_dir():
+                        continue
+                    mname = Path(member.filename).name
+                    if not mname.lower().endswith(".json"):
+                        continue
+                    out = batch_dir / mname
+                    out.write_bytes(z.read(member))
+                    json_count += 1
+    return json_count
 
 if run_update:
     uploads_root = Path("data/_uploads")
@@ -278,44 +316,66 @@ if run_update:
     batch_dir = uploads_root / f"batch_{stamp}"
     batch_dir.mkdir(parents=True, exist_ok=True)
 
-    for uf in uploaded_files or []:
-        (batch_dir / Path(uf.name).name).write_bytes(uf.getbuffer())
+    n_json = _save_uploads_to_batch(uploaded_files, batch_dir)
 
-    with st.spinner("Updating database CSVs..."):
-        result = upd.update_database(
-            uploads_dir=batch_dir,
-            data_dir=Path("data"),
-        )
-
-    if result.get("ok"):
-        st.sidebar.success("✅ Database updated. ")
-        st.sidebar.write(result)  # <-- add this temporarily so you see github_push_ok/msg
-       
-
-        # remove batch files
-        try:
-            shutil.rmtree(batch_dir, ignore_errors=True)
-        except Exception:
-            pass
-
-        # clear uploader visually
-        st.session_state.uploader_key += 1
-
-        # reload CSVs from disk
-        st.cache_data.clear()
-        st.rerun()
+    if n_json == 0:
+        st.sidebar.error("❌ No JSON files found in upload/zip.")
     else:
-        st.sidebar.error(f"❌ Update failed: {result.get('error', 'Unknown error')}")
-        st.sidebar.write(result)
+        with st.spinner("Updating database CSVs..."):
+            result = upd.update_database(
+                uploads_dir=batch_dir,
+                data_dir=Path("data"),
+            )
+
+        if result.get("ok"):
+            st.sidebar.success(
+                "✅ Database updated. "
+                f"events_all Δ{result.get('added_events_all', 0)}, "
+                f"events_full Δ{result.get('added_events_full', 0)}, "
+                f"headers Δ{result.get('headers_net_new_rows', 0)} | "
+                f"GitHub: {result.get('github_push_msg', '')}"
+            )
+
+            # Clean up uploaded files folder
+            try:
+                shutil.rmtree(batch_dir, ignore_errors=True)
+            except Exception:
+                pass
+
+            # Reset uploader so sidebar clears visually
+            st.session_state.uploader_key += 1
+
+            # IMPORTANT: bump dataset version so analysis recomputes once
+            st.session_state.dataset_version += 1
+
+            # Clear streamlit cache so CSV reloads
+            st.cache_data.clear()
+
+            st.rerun()
+        else:
+            st.sidebar.error(f"❌ Update failed: {result.get('error', 'Unknown error')}")
+            st.sidebar.write(result)
 
 # ---------------- Main analysis ----------------
-if json_data_view and selected_team:
-    st.sidebar.caption(f"Using {len(json_data_view.get('matches', []))} match(es) for {selected_team}")
+if json_data and selected_team:
+    cache_key = (st.session_state.dataset_version, selected_team, n_last)
 
-    with st.spinner(f"Analyzing {selected_team}..."):
-        results = get_analysis_results(json_data_view, selected_team)
-        viz_config = oa.get_visualization_coords()
-        league_stats = get_league_stats(json_data_view)
+    if cache_key not in st.session_state.analysis_cache:
+        with st.spinner(f"Analyzing {selected_team}..."):
+            results = get_analysis_results(json_data, selected_team)
+            league_stats = get_league_stats(json_data)
+            viz_config = oa.get_visualization_coords()
+
+        st.session_state.analysis_cache[cache_key] = {
+            "results": results,
+            "league_stats": league_stats,
+            "viz_config": viz_config,
+        }
+    else:
+        cached = st.session_state.analysis_cache[cache_key]
+        results = cached["results"]
+        league_stats = cached["league_stats"]
+        viz_config = cached["viz_config"]
 
     themes = build_team_themes()
     _ = apply_header(selected_team, results.get("used_matches"), themes)
@@ -423,3 +483,12 @@ if json_data_view and selected_team:
                 st.markdown("##### 🟥 Defending corner players (chart)")
                 fig_def = oa.plot_defending_corner_players_diverging(df_team, max_players=15)
                 st.pyplot(style_fig_bg(fig_def, APP_BG), clear_figure=True)
+
+    if show_used:
+    used_tbl = results.get("used_matches_table")
+    if used_tbl is None or (hasattr(used_tbl, "empty") and used_tbl.empty):
+        st.info("No matches used for this team (with current filters).")
+    else:
+        st.subheader(f"Matches used for {selected_team}")
+        st.dataframe(used_tbl, use_container_width=True)
+

@@ -6,6 +6,7 @@ from __future__ import annotations
 import base64
 import os
 import re
+import shutil
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -17,11 +18,12 @@ import streamlit as st
 
 import opp_analysis_new as oa
 import update_database as upd
-import os
-import streamlit as st
 
-os.environ["GITHUB_TOKEN"] = st.secrets["GITHUB_TOKEN"]
-os.environ["GITHUB_REPO"] = st.secrets["GITHUB_REPO"]
+# --- Secrets -> env for git push (safe) ---
+if "GITHUB_TOKEN" in st.secrets:
+    os.environ["GITHUB_TOKEN"] = st.secrets["GITHUB_TOKEN"]
+if "GITHUB_REPO" in st.secrets:
+    os.environ["GITHUB_REPO"] = st.secrets["GITHUB_REPO"]
 os.environ["GITHUB_BRANCH"] = st.secrets.get("GITHUB_BRANCH", "main")
 
 st.set_page_config(page_title="Opponent Analysis - Set Pieces", layout="wide")
@@ -191,6 +193,7 @@ def load_headers(csv_path: str) -> pd.DataFrame:
 
 @st.cache_data
 def get_team_list(json_data):
+    # IMPORTANT: team list should come from full dataset (not match-window filtered)
     return oa.extract_all_teams(json_data)
 
 
@@ -204,44 +207,41 @@ def get_league_stats(json_data):
     return oa.compute_league_attacking_corner_shot_rates(json_data)
 
 
+# ---------------- Sidebar ----------------
 st.sidebar.header("Configuration")
+debug = st.sidebar.checkbox("Debug", value=False)
 
 if not os.path.exists(CORNER_EVENTS_CSV):
     st.error(f"❌ Data file not found at: `{CORNER_EVENTS_CSV}`")
     st.stop()
 
-json_data = load_corner_jsonlike(CORNER_EVENTS_CSV)
-# --- Match window slider (default = all) ---
-matches_all = json_data.get("matches", []) or []
+# Load FULL dataset once (unfiltered)
+json_data_full = load_corner_jsonlike(CORNER_EVENTS_CSV)
 
-# Count only dated matches for nicer UX (but slider will still limit overall list)
-total_matches = len(matches_all)
-
-n_last = st.sidebar.slider(
-    "Analyze last X matches",
-    min_value=1,
-    max_value=max(total_matches, 1),
-    value=total_matches,   # default = all matches loaded
-    step=1,
-)
-
-json_data = oa.filter_last_n_matches(json_data, n_last)
-
-all_teams = get_team_list(json_data)
+all_teams = get_team_list(json_data_full)
 if not all_teams:
     st.error("❌ No teams found in dataset.")
     st.stop()
 
 selected_team = st.sidebar.selectbox("Select team", all_teams)
-all_matches = st.sidebar.checkbox("Use all matches", value=True)
 
-if all_matches:
-    json_data_view = json_data
-else:
-    n_last = st.sidebar.slider("Analyze last X matches", 1, total_matches, min(10, total_matches))
-    json_data_view = oa.filter_last_n_matches(json_data, n_last)
+# Slider = last X matches, BUT only for selected team
+team_matches_all = oa.filter_last_n_matches_for_team(json_data_full, selected_team, None).get("matches", [])
+team_total = len(team_matches_all)
 
-latest_dt, latest_name = oa.get_latest_match_info(json_data)
+n_last = st.sidebar.slider(
+    "Analyze last X matches (selected team only)",
+    min_value=1,
+    max_value=max(team_total, 1),
+    value=max(team_total, 1),  # default = all matches for that team
+    step=1,
+    disabled=(team_total == 0),
+)
+
+json_data_view = oa.filter_last_n_matches_for_team(json_data_full, selected_team, n_last)
+
+# Latest match caption should reflect full dataset
+latest_dt, latest_name = oa.get_latest_match_info(json_data_full)
 st.sidebar.markdown("---")
 st.sidebar.caption(
     f"Latest match in dataset: {latest_dt.strftime('%d-%m-%Y')} — {latest_name}"
@@ -249,13 +249,10 @@ st.sidebar.caption(
     else "Latest match in dataset: -"
 )
 
-
-# --- ADD DATA ---
+# --- ADD DATA (single uploader + single button) ---
 st.sidebar.markdown("---")
 st.sidebar.subheader("Add data")
 
-
-# 1) one uploader with a resettable key (so it clears visually)
 if "uploader_key" not in st.session_state:
     st.session_state.uploader_key = 0
 
@@ -266,17 +263,15 @@ uploaded_files = st.sidebar.file_uploader(
     key=f"uploader_{st.session_state.uploader_key}",
 )
 
-# 2) one update button (disabled when no files)
 run_update = st.sidebar.button(
     "Update database",
     type="primary",
     disabled=not uploaded_files,
 )
 
-# (Optional) your debug section stays OUTSIDE the sidebar button logic
-# after json_data and selected_team are set:
-if debug and json_data and selected_team:
-    dbg = oa.debug_used_matches(json_data, selected_team)
+# Debug section (optional) – uses full dataset + selected team
+if debug and json_data_full and selected_team:
+    dbg = oa.debug_used_matches(json_data_full, selected_team)
     st.subheader("Debug match usage")
     st.write("If many rows show `no_true_corner_starts`, your `_is_true_corner_start` logic is rejecting corners.")
     st.dataframe(dbg.sort_values(["reason", "corner_starts_found"], ascending=[True, True]), use_container_width=True)
@@ -287,7 +282,6 @@ if debug and json_data and selected_team:
         use_container_width=True,
     )
 
-# 3) handle update
 if run_update:
     uploads_root = Path("data/_uploads")
     uploads_root.mkdir(parents=True, exist_ok=True)
@@ -296,7 +290,6 @@ if run_update:
     batch_dir = uploads_root / f"batch_{stamp}"
     batch_dir.mkdir(parents=True, exist_ok=True)
 
-    # Save uploaded files into the batch folder
     for uf in uploaded_files or []:
         (batch_dir / Path(uf.name).name).write_bytes(uf.getbuffer())
 
@@ -315,25 +308,29 @@ if run_update:
             f"GitHub: {result.get('github_push_msg', '')}"
         )
 
-        # Delete uploaded JSONs (optional but recommended)
+        # remove batch files
         try:
             shutil.rmtree(batch_dir, ignore_errors=True)
         except Exception:
             pass
 
-        # Reset uploader so files disappear visually
+        # clear uploader visually
         st.session_state.uploader_key += 1
 
-        # Clear cached data so app reloads fresh CSVs
+        # reload CSVs from disk
         st.cache_data.clear()
         st.rerun()
     else:
         st.sidebar.error(f"❌ Update failed: {result.get('error', 'Unknown error')}")
-if json_data and selected_team:
+
+# ---------------- Main analysis ----------------
+if json_data_view and selected_team:
+    st.sidebar.caption(f"Using {len(json_data_view.get('matches', []))} match(es) for {selected_team}")
+
     with st.spinner(f"Analyzing {selected_team}..."):
-        results = get_analysis_results(json_data, selected_team)
+        results = get_analysis_results(json_data_view, selected_team)
         viz_config = oa.get_visualization_coords()
-        league_stats = get_league_stats(json_data)
+        league_stats = get_league_stats(json_data_view)
 
     themes = build_team_themes()
     _ = apply_header(selected_team, results.get("used_matches"), themes)
@@ -413,7 +410,7 @@ if json_data and selected_team:
 
     st.divider()
     st.markdown("### Attacking & Defending corner headers: Who is dangerous, and who is weak?")
-    
+
     if not os.path.exists(HEADERS_CSV):
         st.warning(f"Player charts skipped because `{HEADERS_CSV}` is missing.")
     elif not os.path.exists(EVENTS_SEQ_CSV):
@@ -422,12 +419,12 @@ if json_data and selected_team:
         with st.spinner("Loading headers + mapping HOME/AWAY to actual teams..."):
             headers_df = load_headers(HEADERS_CSV)
             seq_df = load_events_sequences(EVENTS_SEQ_CSV)
-    
+
             headers_df = oa.attach_actual_club_from_events(headers_df, seq_df)
-    
+
             team_c = oa._canon_team(selected_team) or selected_team
             df_team = headers_df[headers_df["club_actual_canon"] == team_c].copy()
-    
+
         if df_team.empty:
             st.warning("No player header rows found for this team (after HOME/AWAY mapping).")
         else:
@@ -436,12 +433,8 @@ if json_data and selected_team:
                 st.markdown("##### 🟦 Attacking corner players (chart)")
                 fig_att = oa.plot_attacking_corner_players_headers(df_team, max_players=15)
                 st.pyplot(style_fig_bg(fig_att, APP_BG), clear_figure=True)
-    
+
             with col2:
                 st.markdown("##### 🟥 Defending corner players (chart)")
                 fig_def = oa.plot_defending_corner_players_diverging(df_team, max_players=15)
                 st.pyplot(style_fig_bg(fig_def, APP_BG), clear_figure=True)
-
-    
-
-

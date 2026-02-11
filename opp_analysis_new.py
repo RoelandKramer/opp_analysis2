@@ -706,6 +706,7 @@ def process_corner_data(json_data: Dict[str, Any], selected_team_name: str) -> D
     opponent_left_side, opponent_right_side = [], []
     own_left_side, own_right_side = [], []
     opponent_seq_with_shot: List[List[Dict[str, Any]]] = []
+    used_match_rows: List[Dict[str, Any]] = []
 
     used_matches = 0
     _seen_seq_keys = set()
@@ -723,7 +724,11 @@ def process_corner_data(json_data: Dict[str, Any], selected_team_name: str) -> D
 
         if selected_team_name not in match_teams:
             continue
-
+        used_match_rows.append({
+                "match_id": match.get("match_id"),
+                "match_name": match.get("match_name"),
+                "match_date": match.get("match_date"),
+            })
         used_matches += 1
         TOP_X, BOTTOM_X, LEFT_Y, RIGHT_Y = _resolve_pitch_bounds(match, events)
         zones_TL, zones_BR, zones_TR, zones_BL = build_zones(TOP_X, BOTTOM_X, LEFT_Y, RIGHT_Y)
@@ -810,6 +815,8 @@ def process_corner_data(json_data: Dict[str, Any], selected_team_name: str) -> D
         "attacking": {"left_pct": _zone_pcts(own_left_side), "right_pct": _zone_pcts(own_right_side)},
         "attacking_shots": {"left": att_shots_left, "right": att_shots_right},
         "tables": taker_tables,
+        "used_matches_table": pd.DataFrame(used_match_rows),
+
     }
 
 
@@ -1382,10 +1389,6 @@ def filter_headers_for_team(headers_df: pd.DataFrame, team: str) -> pd.DataFrame
     df["__club_c"] = df["club"].apply(_canon_team)
     return df[df["__club_c"] == team_c].copy()
 
-import numpy as np
-import pandas as pd
-import matplotlib.pyplot as plt
-
 
 def plot_defending_corner_players_diverging(
     def_tbl: pd.DataFrame,
@@ -1581,84 +1584,84 @@ def load_corner_positions_headers(csv_path: str) -> pd.DataFrame:
 def _to_int_series(s: pd.Series) -> pd.Series:
     return pd.to_numeric(s, errors="coerce").fillna(0).astype(int)
 
-def build_attacking_headers_player_table(*, team: str, headers_df: pd.DataFrame) -> pd.DataFrame:
-    if headers_df is None or headers_df.empty:
-        return pd.DataFrame(columns=["player_name", "CornersOnPitch", "Headshots", "HeadGoals"])
+# def build_attacking_headers_player_table(*, team: str, headers_df: pd.DataFrame) -> pd.DataFrame:
+#     if headers_df is None or headers_df.empty:
+#         return pd.DataFrame(columns=["player_name", "CornersOnPitch", "Headshots", "HeadGoals"])
 
-    df = headers_df.copy()
-    if "club" not in df.columns:
-        return pd.DataFrame(columns=["player_name", "CornersOnPitch", "Headshots", "HeadGoals"])
+#     df = headers_df.copy()
+#     if "club" not in df.columns:
+#         return pd.DataFrame(columns=["player_name", "CornersOnPitch", "Headshots", "HeadGoals"])
 
-    team_c = _canon_team(team) or team
-    df["__club_c"] = df["club"].apply(_canon_team)
-    df = df[df["__club_c"] == team_c].copy()
-    if df.empty:
-        return pd.DataFrame(columns=["player_name", "CornersOnPitch", "Headshots", "HeadGoals"])
+#     team_c = _canon_team(team) or team
+#     df["__club_c"] = df["club"].apply(_canon_team)
+#     df = df[df["__club_c"] == team_c].copy()
+#     if df.empty:
+#         return pd.DataFrame(columns=["player_name", "CornersOnPitch", "Headshots", "HeadGoals"])
 
-    for col in ("Attacking_corners_on_pitch", "Attacking_corners_headed", "Attacking_corners_headed_and_scored"):
-        if col not in df.columns:
-            df[col] = 0
-        df[col] = _to_int_series(df[col])
+#     for col in ("Attacking_corners_on_pitch", "Attacking_corners_headed", "Attacking_corners_headed_and_scored"):
+#         if col not in df.columns:
+#             df[col] = 0
+#         df[col] = _to_int_series(df[col])
 
-    if "player_name" not in df.columns:
-        df["player_name"] = df.get("player_id", "Unknown").astype(str)
+#     if "player_name" not in df.columns:
+#         df["player_name"] = df.get("player_id", "Unknown").astype(str)
 
-    out = (
-        df.groupby("player_name", dropna=False)[
-            ["Attacking_corners_on_pitch", "Attacking_corners_headed", "Attacking_corners_headed_and_scored"]
-        ]
-        .sum()
-        .reset_index()
-        .rename(
-            columns={
-                "Attacking_corners_on_pitch": "CornersOnPitch",
-                "Attacking_corners_headed": "Headshots",
-                "Attacking_corners_headed_and_scored": "HeadGoals",
-            }
-        )
-    )
-    out["HeadGoals"] = np.minimum(out["HeadGoals"], out["Headshots"])
-    return out.sort_values(["CornersOnPitch", "Headshots", "HeadGoals"], ascending=[False, False, False]).reset_index(drop=True)
+#     out = (
+#         df.groupby("player_name", dropna=False)[
+#             ["Attacking_corners_on_pitch", "Attacking_corners_headed", "Attacking_corners_headed_and_scored"]
+#         ]
+#         .sum()
+#         .reset_index()
+#         .rename(
+#             columns={
+#                 "Attacking_corners_on_pitch": "CornersOnPitch",
+#                 "Attacking_corners_headed": "Headshots",
+#                 "Attacking_corners_headed_and_scored": "HeadGoals",
+#             }
+#         )
+#     )
+#     out["HeadGoals"] = np.minimum(out["HeadGoals"], out["Headshots"])
+#     return out.sort_values(["CornersOnPitch", "Headshots", "HeadGoals"], ascending=[False, False, False]).reset_index(drop=True)
 
-def build_defending_headers_player_table(*, team: str, headers_df: pd.DataFrame) -> pd.DataFrame:
-    if headers_df is None or headers_df.empty:
-        return pd.DataFrame(columns=["player_name", "CornersOnPitch", "Faults", "GoalsAllowed", "Clearances"])
+# def build_defending_headers_player_table(*, team: str, headers_df: pd.DataFrame) -> pd.DataFrame:
+#     if headers_df is None or headers_df.empty:
+#         return pd.DataFrame(columns=["player_name", "CornersOnPitch", "Faults", "GoalsAllowed", "Clearances"])
 
-    df = headers_df.copy()
-    if "club" not in df.columns:
-        return pd.DataFrame(columns=["player_name", "CornersOnPitch", "Faults", "GoalsAllowed", "Clearances"])
+#     df = headers_df.copy()
+#     if "club" not in df.columns:
+#         return pd.DataFrame(columns=["player_name", "CornersOnPitch", "Faults", "GoalsAllowed", "Clearances"])
 
-    team_c = _canon_team(team) or team
-    df["__club_c"] = df["club"].apply(_canon_team)
-    df = df[df["__club_c"] == team_c].copy()
-    if df.empty:
-        return pd.DataFrame(columns=["player_name", "CornersOnPitch", "Faults", "GoalsAllowed", "Clearances"])
+#     team_c = _canon_team(team) or team
+#     df["__club_c"] = df["club"].apply(_canon_team)
+#     df = df[df["__club_c"] == team_c].copy()
+#     if df.empty:
+#         return pd.DataFrame(columns=["player_name", "CornersOnPitch", "Faults", "GoalsAllowed", "Clearances"])
 
-    for col in ("Defending_corners_on_pitch", "Defending_corners_errors", "Defending_corners_fatal_errors", "Defending_corners_defended"):
-        if col not in df.columns:
-            df[col] = 0
-        df[col] = _to_int_series(df[col])
+#     for col in ("Defending_corners_on_pitch", "Defending_corners_errors", "Defending_corners_fatal_errors", "Defending_corners_defended"):
+#         if col not in df.columns:
+#             df[col] = 0
+#         df[col] = _to_int_series(df[col])
 
-    if "player_name" not in df.columns:
-        df["player_name"] = df.get("player_id", "Unknown").astype(str)
+#     if "player_name" not in df.columns:
+#         df["player_name"] = df.get("player_id", "Unknown").astype(str)
 
-    out = (
-        df.groupby("player_name", dropna=False)[
-            ["Defending_corners_on_pitch", "Defending_corners_errors", "Defending_corners_fatal_errors", "Defending_corners_defended"]
-        ]
-        .sum()
-        .reset_index()
-        .rename(
-            columns={
-                "Defending_corners_on_pitch": "CornersOnPitch",
-                "Defending_corners_errors": "Faults",
-                "Defending_corners_fatal_errors": "GoalsAllowed",
-                "Defending_corners_defended": "Clearances",
-            }
-        )
-    )
-    out["GoalsAllowed"] = np.minimum(out["GoalsAllowed"], out["Faults"])
-    return out.sort_values(["CornersOnPitch", "Faults", "GoalsAllowed", "Clearances"], ascending=[False, False, False, False]).reset_index(drop=True)
+#     out = (
+#         df.groupby("player_name", dropna=False)[
+#             ["Defending_corners_on_pitch", "Defending_corners_errors", "Defending_corners_fatal_errors", "Defending_corners_defended"]
+#         ]
+#         .sum()
+#         .reset_index()
+#         .rename(
+#             columns={
+#                 "Defending_corners_on_pitch": "CornersOnPitch",
+#                 "Defending_corners_errors": "Faults",
+#                 "Defending_corners_fatal_errors": "GoalsAllowed",
+#                 "Defending_corners_defended": "Clearances",
+#             }
+#         )
+#     )
+#     out["GoalsAllowed"] = np.minimum(out["GoalsAllowed"], out["Faults"])
+#     return out.sort_values(["CornersOnPitch", "Faults", "GoalsAllowed", "Clearances"], ascending=[False, False, False, False]).reset_index(drop=True)
 
 # ============================================================
 # 9) OPTIONAL: paths container

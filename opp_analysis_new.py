@@ -1551,7 +1551,7 @@ def plot_attacking_corner_players_headers(
     fig, ax = plt.subplots(figsize=(10, fig_h))
 
     ax.barh(y, goals, color="darkgreen", label="Header goals")
-    ax.barh(y, rest, left=goals, color="springgreen", label="Headers")
+    ax.barh(y, rest, left=goals, color="lightgreen", label="Headers")
 
     ax.set_yticks(y)
     ax.set_yticklabels(names)

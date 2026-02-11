@@ -174,6 +174,63 @@ def _canon_team(name: Any) -> Optional[str]:
         return None
     return TEAM_NAME_MAPPING.get(s, s)
 
+def debug_used_matches(json_data: Dict[str, Any], selected_team_name: str) -> pd.DataFrame:
+    rows = []
+    for match in json_data.get("matches", []):
+        mid = match.get("match_id")
+        mname = match.get("match_name")
+        events = match.get("corner_events", []) or []
+        if not events:
+            rows.append({
+                "match_id": mid,
+                "match_name": mname,
+                "events": 0,
+                "team_present": False,
+                "corner_starts_found": 0,
+                "reason": "no_events",
+            })
+            continue
+
+        match_teams = set()
+        for ev in events:
+            c = get_canonical_team(ev.get("teamName"))
+            if c:
+                match_teams.add(c)
+
+        team_present = selected_team_name in match_teams
+        if not team_present:
+            rows.append({
+                "match_id": mid,
+                "match_name": mname,
+                "events": len(events),
+                "team_present": False,
+                "corner_starts_found": 0,
+                "reason": "team_not_present_in_match",
+            })
+            continue
+
+        corner_starts = 0
+        corner_starts_seqStart_types = set()
+
+        for ev in events:
+            if ev.get("possessionTypeName") == "CORNER":
+                corner_starts_seqStart_types.add(type(ev.get("sequenceStart")).__name__)
+            if _is_true_corner_start(ev):
+                corner_starts += 1
+
+        reason = "ok" if corner_starts > 0 else "no_true_corner_starts"
+        rows.append({
+            "match_id": mid,
+            "match_name": mname,
+            "events": len(events),
+            "team_present": True,
+            "corner_starts_found": corner_starts,
+            "sequenceStart_types_seen": ", ".join(sorted(corner_starts_seqStart_types)) if corner_starts_seqStart_types else "",
+            "reason": reason,
+        })
+
+    return pd.DataFrame(rows)
+
 
 # ============================================================
 # 2) CSV LOADERS (json-like wrapper)

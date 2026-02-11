@@ -268,18 +268,7 @@ run_update = st.sidebar.button(
     disabled=not uploaded_files,
 )
 
-# Debug section (optional) – uses full dataset + selected team
-if debug and json_data_full and selected_team:
-    dbg = oa.debug_used_matches(json_data_full, selected_team)
-    st.subheader("Debug match usage")
-    st.write("If many rows show `no_true_corner_starts`, your `_is_true_corner_start` logic is rejecting corners.")
-    st.dataframe(dbg.sort_values(["reason", "corner_starts_found"], ascending=[True, True]), use_container_width=True)
 
-    st.write("Summary:")
-    st.dataframe(
-        dbg["reason"].value_counts().reset_index().rename(columns={"index": "reason", "reason": "count"}),
-        use_container_width=True,
-    )
 
 if run_update:
     uploads_root = Path("data/_uploads")

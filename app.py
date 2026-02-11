@@ -233,7 +233,25 @@ if not all_teams:
 selected_team = st.sidebar.selectbox("Select team", all_teams)
 
 st.sidebar.markdown("---")
-show_used = st.sidebar.button("Show matches used (this team)")
+if st.sidebar.button("Show matches used"):
+    matches_src = json_data_view.get("matches", []) if "json_data_view" in locals() else json_data.get("matches", [])
+
+    used_rows = []
+    for m in matches_src:
+        events = m.get("corner_events", []) or []
+        if not events:
+            continue
+        teams_in_match = {
+            oa.get_canonical_team(ev.get("teamName"))
+            for ev in events
+            if oa.get_canonical_team(ev.get("teamName"))
+        }
+        if selected_team in teams_in_match:
+            used_rows.append({"match_name": m.get("match_name", "")})
+
+    df_used = pd.DataFrame(used_rows).dropna()
+    st.sidebar.write(f"Matches used: {len(df_used)}")
+    st.sidebar.dataframe(df_used[["match_name"]], use_container_width=True, hide_index=True)
 
 # Slider = last X matches, BUT only for selected team
 team_matches_all = oa.filter_last_n_matches_for_team(json_data_full, selected_team, None).get("matches", [])
@@ -484,11 +502,5 @@ if json_data_full and selected_team:
                 fig_def = oa.plot_defending_corner_players_diverging(df_team, max_players=15)
                 st.pyplot(style_fig_bg(fig_def, APP_BG), clear_figure=True)
 
-    if show_used:
-        used_tbl = results.get("used_matches_table")
-    if used_tbl is None or (hasattr(used_tbl, "empty") and used_tbl.empty):
-        st.info("No matches used for this team (with current filters).")
-    else:
-        st.subheader(f"Matches used for {selected_team}")
-        st.dataframe(used_tbl, use_container_width=True)
+)
 

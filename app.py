@@ -270,6 +270,45 @@ if run_update:
         st.rerun()
     st.sidebar.error(f"❌ Update failed: {result.get('error', 'Unknown error')}")
 
+# --- Sidebar uploader ---
+if "uploader_key" not in st.session_state:
+    st.session_state.uploader_key = 0
+
+uploaded = st.sidebar.file_uploader(
+    "Drop SciSports JSONs here",
+    type=["json"],
+    accept_multiple_files=True,
+    key=f"uploader_{st.session_state.uploader_key}",
+)
+
+# Save uploaded files to uploads_dir
+if uploaded:
+    for f in uploaded:
+        out_path = uploads_dir / f.name
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_bytes(f.getbuffer())
+
+# --- Update button ---
+if st.sidebar.button("Update database"):
+    res = update_database(uploads_dir=uploads_dir, data_dir=data_dir)
+
+    if res.get("ok"):
+        # 1) delete uploaded files so they’re gone “for real”
+        for p in uploads_dir.glob("**/*.json"):
+            try:
+                p.unlink()
+            except Exception:
+                pass
+
+        # 2) reset uploader widget so sidebar clears visually
+        st.session_state.uploader_key += 1
+
+        st.sidebar.success("Database updated ✅")
+        st.sidebar.write(res)
+        st.rerun()
+    else:
+        st.sidebar.error(res.get("error", "Update failed"))
+
 if json_data and selected_team:
     with st.spinner(f"Analyzing {selected_team}..."):
         results = get_analysis_results(json_data, selected_team)

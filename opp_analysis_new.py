@@ -1423,6 +1423,20 @@ def build_defending_corners_player_table(
     return out.sort_values(["CornersOnPitch", "Faults", "GoalsAllowed", "Clearances"], ascending=[False, False, False, False]).reset_index(drop=True)
 
 
+def filter_headers_for_team(headers_df: pd.DataFrame, team: str) -> pd.DataFrame:
+    if headers_df is None or headers_df.empty:
+        return pd.DataFrame()
+    if "club" not in headers_df.columns:
+        return pd.DataFrame()
+    team_c = _canon_team(team) or team
+    df = headers_df.copy()
+    df["__club_c"] = df["club"].apply(_canon_team)
+    return df[df["__club_c"] == team_c].copy()
+
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+
 
 def plot_defending_corner_players_diverging(
     def_tbl: pd.DataFrame,
@@ -1431,12 +1445,12 @@ def plot_defending_corner_players_diverging(
     title: str = "Defending corner players",
 ):
     """
-    Diverging horizontal bar chart:
-      - Center line at 0
-      - Left: Faults (red), with the 'faults that led to a goal' in black
-      - Right: Clearances (green)
-      - Sorted high->low by (Faults + Clearances)
-    Expects columns: player_name, Faults, GoalsAllowed, Clearances
+    Works with your dataset columns by mapping:
+      - Clearances  <- Defending_corners_defended
+      - Faults      <- Defending_corners_errors + Defending_corners_fatal_errors
+      - GoalsAllowed<- Defending_corners_fatal_errors
+
+    Also auto-aggregates (sums) over multiple rows per player_name.
     """
     if def_tbl is None or def_tbl.empty:
         fig, ax = plt.subplots(figsize=(8, 3))
@@ -1446,14 +1460,31 @@ def plot_defending_corner_players_diverging(
 
     df = def_tbl.copy()
 
-    # Ensure numeric + safe
-    for c in ("Faults", "GoalsAllowed", "Clearances"):
-        if c not in df.columns:
-            df[c] = 0
-        df[c] = pd.to_numeric(df[c], errors="coerce").fillna(0).astype(int)
-
+    # Ensure player_name exists
     if "player_name" not in df.columns:
         df["player_name"] = "Unknown"
+
+    # --- Map your columns -> expected plotting columns ---
+    # If user already passed Faults/GoalsAllowed/Clearances, keep them.
+    if "Clearances" not in df.columns:
+        df["Clearances"] = df.get("Defending_corners_defended", 0)
+
+    if "GoalsAllowed" not in df.columns:
+        df["GoalsAllowed"] = df.get("Defending_corners_fatal_errors", 0)
+
+    if "Faults" not in df.columns:
+        # Treat "fatal errors" as a subset of errors that led to a goal
+        df["Faults"] = df.get("Defending_corners_errors", 0) + df.get("Defending_corners_fatal_errors", 0)
+
+    # --- Ensure numeric ---
+    for c in ("Faults", "GoalsAllowed", "Clearances"):
+        df[c] = pd.to_numeric(df.get(c, 0), errors="coerce").fillna(0).astype(int)
+
+    # --- Aggregate across rows (e.g., per match) ---
+    df = (
+        df.groupby("player_name", as_index=False)[["Faults", "GoalsAllowed", "Clearances"]]
+        .sum()
+    )
 
     # Clamp: goalsAllowed cannot exceed faults
     df["GoalsAllowed"] = np.minimum(df["GoalsAllowed"], df["Faults"])
@@ -1483,35 +1514,28 @@ def plot_defending_corner_players_diverging(
     # Right side (positive): green clearances
     ax.barh(y, clearances, color="green", label="Clearances")
 
-    # Center line
     ax.axvline(0, linewidth=1)
 
     ax.set_yticks(y)
     ax.set_yticklabels(names)
     ax.set_title(title)
 
-    # Symmetric-ish x limits
     left_max = (faults_goal + faults_non_goal).max() if len(df) else 1
     right_max = clearances.max() if len(df) else 1
     lim = max(left_max, right_max, 1)
     ax.set_xlim(-lim * 1.15, lim * 1.15)
 
-    # Cleaner look
     ax.spines["top"].set_visible(False)
     ax.spines["right"].set_visible(False)
 
-    # Optional: show counts at bar ends
     for i in range(len(df)):
         f = int(df.loc[i, "Faults"])
         g = int(df.loc[i, "GoalsAllowed"])
         c = int(df.loc[i, "Clearances"])
-        # left label (faults)
         if f > 0:
             ax.text(-f - 0.05, y[i], f"{f}", va="center", ha="right", fontsize=9)
-        # right label (clearances)
         if c > 0:
             ax.text(c + 0.05, y[i], f"{c}", va="center", ha="left", fontsize=9)
-        # small goal number inside black if any
         if g > 0:
             ax.text(-g / 2, y[i], f"{g}", va="center", ha="center", fontsize=9, color="white")
 
@@ -1527,11 +1551,11 @@ def plot_attacking_corner_players_headers(
     title: str = "Attacking corner players (Headers & Header goals)",
 ):
     """
-    Horizontal stacked bars to the right:
-      - Darkgreen: goals from headers (HeadGoals)
-      - Green: remaining headers (Headshots - HeadGoals)
-    Sorted high->low by Headshots (then HeadGoals).
-    Expects columns: player_name, Headshots, HeadGoals
+    Works with your dataset columns by mapping:
+      - Headshots <- Attacking_corners_headed
+      - HeadGoals <- Attacking_corners_headed_and_scored
+
+    Also auto-aggregates (sums) over multiple rows per player_name.
     """
     if att_tbl is None or att_tbl.empty:
         fig, ax = plt.subplots(figsize=(8, 3))
@@ -1541,19 +1565,26 @@ def plot_attacking_corner_players_headers(
 
     df = att_tbl.copy()
 
-    for c in ("Headshots", "HeadGoals"):
-        if c not in df.columns:
-            df[c] = 0
-        df[c] = pd.to_numeric(df[c], errors="coerce").fillna(0).astype(int)
-
     if "player_name" not in df.columns:
         df["player_name"] = "Unknown"
+
+    # --- Map your columns -> expected plotting columns ---
+    if "Headshots" not in df.columns:
+        df["Headshots"] = df.get("Attacking_corners_headed", 0)
+
+    if "HeadGoals" not in df.columns:
+        df["HeadGoals"] = df.get("Attacking_corners_headed_and_scored", 0)
+
+    for c in ("Headshots", "HeadGoals"):
+        df[c] = pd.to_numeric(df.get(c, 0), errors="coerce").fillna(0).astype(int)
+
+    # --- Aggregate across rows (e.g., per match) ---
+    df = df.groupby("player_name", as_index=False)[["Headshots", "HeadGoals"]].sum()
 
     # Clamp goals <= headers
     df["HeadGoals"] = np.minimum(df["HeadGoals"], df["Headshots"])
     df["Headers_non_goal"] = np.maximum(df["Headshots"] - df["HeadGoals"], 0)
 
-    # Sort
     df = df.sort_values(["Headshots", "HeadGoals"], ascending=[False, False]).head(max_players)
     df = df.iloc[::-1].reset_index(drop=True)
 
@@ -1567,7 +1598,6 @@ def plot_attacking_corner_players_headers(
     fig_h = max(3.5, 0.45 * len(df) + 1.2)
     fig, ax = plt.subplots(figsize=(10, fig_h))
 
-    # Darkgreen goals first, then green remainder (stacked)
     ax.barh(y, goals, color="darkgreen", label="Header goals")
     ax.barh(y, rest, left=goals, color="green", label="Headers")
 
@@ -1581,7 +1611,6 @@ def plot_attacking_corner_players_headers(
     ax.spines["top"].set_visible(False)
     ax.spines["right"].set_visible(False)
 
-    # Labels at bar ends
     for i in range(len(df)):
         th = int(total_headers[i])
         g = int(goals[i])
@@ -1593,6 +1622,7 @@ def plot_attacking_corner_players_headers(
     ax.legend(loc="lower right")
     fig.tight_layout()
     return fig
+
 
 def load_corner_positions_headers(csv_path: str) -> pd.DataFrame:
     if not os.path.exists(csv_path):

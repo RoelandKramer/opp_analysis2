@@ -485,7 +485,7 @@ if json_data and selected_team:
                 st.pyplot(style_fig_bg(fig_def, APP_BG), clear_figure=True)
 
     if show_used:
-    used_tbl = results.get("used_matches_table")
+        used_tbl = results.get("used_matches_table")
     if used_tbl is None or (hasattr(used_tbl, "empty") and used_tbl.empty):
         st.info("No matches used for this team (with current filters).")
     else:

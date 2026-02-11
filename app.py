@@ -341,44 +341,35 @@ if json_data and selected_team:
 
     st.divider()
     st.markdown("### Attacking & Defending corner headers: Who is dangerous, and who is weak?")
-
+    
     if not os.path.exists(HEADERS_CSV):
         st.warning(f"Player charts skipped because `{HEADERS_CSV}` is missing.")
+    elif not os.path.exists(EVENTS_SEQ_CSV):
+        st.warning(f"Player charts skipped because `{EVENTS_SEQ_CSV}` is missing (needed to map HOME/AWAY to teams).")
     else:
-        with st.spinner("Loading corner_positions_headers.csv..."):
+        with st.spinner("Loading headers + mapping HOME/AWAY to actual teams..."):
             headers_df = load_headers(HEADERS_CSV)
-
-            # Filter to selected team (club column)
+            seq_df = load_events_sequences(EVENTS_SEQ_CSV)
+    
+            headers_df = oa.attach_actual_club_from_events(headers_df, seq_df)
+    
             team_c = oa._canon_team(selected_team) or selected_team
-            df_team = headers_df.copy()
-            if "club" in df_team.columns:
-                df_team["__club_c"] = df_team["club"].apply(oa._canon_team)
-                df_team = df_team[df_team["__club_c"] == team_c].copy()
-            else:
-                df_team = df_team.iloc[0:0].copy()
-
-        col1, col2 = st.columns(2)
-        with col1:
-            st.markdown("##### 🟦 Attacking corner players (chart)")
-            fig_att = oa.plot_attacking_corner_players_headers(df_team, max_players=15)
-            st.pyplot(style_fig_bg(fig_att, APP_BG), clear_figure=True)
-
-        with col2:
-            st.markdown("##### 🟥 Defending corner players (chart)")
-            fig_def = oa.plot_defending_corner_players_diverging(df_team, max_players=15)
-            st.pyplot(style_fig_bg(fig_def, APP_BG), clear_figure=True)
+            df_team = headers_df[headers_df["club_actual_canon"] == team_c].copy()
+    
+        if df_team.empty:
+            st.warning("No player header rows found for this team (after HOME/AWAY mapping).")
+        else:
+            col1, col2 = st.columns(2)
+            with col1:
+                st.markdown("##### 🟦 Attacking corner players (chart)")
+                fig_att = oa.plot_attacking_corner_players_headers(df_team, max_players=15)
+                st.pyplot(style_fig_bg(fig_att, APP_BG), clear_figure=True)
+    
+            with col2:
+                st.markdown("##### 🟥 Defending corner players (chart)")
+                fig_def = oa.plot_defending_corner_players_diverging(df_team, max_players=15)
+                st.pyplot(style_fig_bg(fig_def, APP_BG), clear_figure=True)
 
     
-    st.write("HEADERS_CSV rows:", headers_df.shape)
-    st.write("HEADERS_CSV columns:", list(headers_df.columns))
-    
-    if "club" in headers_df.columns:
-        st.write("Unique clubs (first 50):", sorted(headers_df["club"].dropna().astype(str).unique())[:50])
-    
-    st.write("Selected team:", selected_team)
-    st.write("Team canon:", oa._canon_team(selected_team) or selected_team)
-    
-    st.write("df_team rows:", df_team.shape)
-    st.dataframe(df_team.head(20))
 
 

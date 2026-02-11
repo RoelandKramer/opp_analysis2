@@ -301,6 +301,7 @@ if run_update:
     if result.get("ok"):
         st.sidebar.success(
             "✅ Database updated. "
+            st.sidebar.write(result)  # <-- add this temporarily so you see github_push_ok/msg
             f"events_all Δ{result.get('added_events_all', 0)}, "
             f"events_full Δ{result.get('added_events_full', 0)}, "
             f"headers Δ{result.get('headers_net_new_rows', 0)}\n\n"
@@ -321,6 +322,7 @@ if run_update:
         st.rerun()
     else:
         st.sidebar.error(f"❌ Update failed: {result.get('error', 'Unknown error')}")
+        st.sidebar.write(result)
 
 # ---------------- Main analysis ----------------
 if json_data_view and selected_team:

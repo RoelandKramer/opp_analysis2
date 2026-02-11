@@ -259,6 +259,67 @@ def extract_all_teams(json_data: Dict[str, Any]) -> List[str]:
             if t:
                 teams.add(t)
     return sorted(teams)
+def attach_actual_club_from_events(
+    headers_df: pd.DataFrame,
+    events_seq_df: pd.DataFrame,
+) -> pd.DataFrame:
+    """
+    headers_df has club = HOME/AWAY. This function attaches:
+      - club_actual (real team name)
+      - club_actual_canon (canonical team name)
+    so you can filter by selected team.
+    """
+    if headers_df is None or headers_df.empty:
+        return headers_df
+
+    if events_seq_df is None or events_seq_df.empty:
+        return headers_df
+
+    ev = events_seq_df.copy()
+
+    # Ensure we have match_id to join on
+    if "match_id" not in ev.columns:
+        if "source_event_file" in ev.columns:
+            ev["match_id"] = ev["source_event_file"].apply(_match_id_from_path)
+        else:
+            return headers_df
+
+    if "groupName" not in ev.columns or "teamName" not in ev.columns:
+        return headers_df
+
+    # Normalize groupName -> HOME/AWAY
+    def _norm_group(x: Any) -> Optional[str]:
+        if not isinstance(x, str):
+            return None
+        s = x.strip().upper()
+        if s in {"HOME", "H"}:
+            return "HOME"
+        if s in {"AWAY", "A"}:
+            return "AWAY"
+        return None
+
+    ev["__group"] = ev["groupName"].apply(_norm_group)
+    ev = ev.dropna(subset=["match_id", "__group", "teamName"]).copy()
+
+    # Build match_id -> {HOME: teamName, AWAY: teamName}
+    # If multiple rows exist, we take the most common teamName per group in that match
+    map_rows = (
+        ev.groupby(["match_id", "__group"])["teamName"]
+        .agg(lambda s: s.value_counts().index[0])
+        .reset_index()
+        .rename(columns={"__group": "club", "teamName": "club_actual"})
+    )
+
+    out = headers_df.copy()
+    if "match_id" not in out.columns or "club" not in out.columns:
+        return out
+
+    out["match_id"] = out["match_id"].astype(str)
+    map_rows["match_id"] = map_rows["match_id"].astype(str)
+
+    out = out.merge(map_rows, on=["match_id", "club"], how="left")
+    out["club_actual_canon"] = out["club_actual"].apply(_canon_team)
+    return out
 
 
 # ============================================================

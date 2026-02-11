@@ -75,6 +75,50 @@ def filter_last_n_matches(json_data: Dict[str, Any], n_last: Optional[int]) -> D
 
     return {"matches": ordered[-int(n_last):]}
 
+def filter_last_n_matches_for_team(
+    json_data: Dict[str, Any],
+    selected_team_name: str,
+    n_last: Optional[int],
+) -> Dict[str, Any]:
+    """
+    Keep only matches where selected_team_name appears (based on teamName in corner_events),
+    then take the last n_last matches by match_date (undated go last/older).
+    If n_last is None or >= available -> keep all team matches.
+    """
+    matches = list(json_data.get("matches", []) or [])
+    if not matches:
+        return {"matches": []}
+
+    # 1) keep only matches where team appears
+    team_matches: List[Dict[str, Any]] = []
+    for m in matches:
+        events = m.get("corner_events", []) or []
+        match_teams = set()
+        for ev in events:
+            c = get_canonical_team(ev.get("teamName"))
+            if c:
+                match_teams.add(c)
+        if selected_team_name in match_teams:
+            team_matches.append(m)
+
+    if not team_matches:
+        return {"matches": []}
+
+    # 2) order by match_date (oldest -> newest), undated treated as oldest
+    def _dt(mm):
+        dt = mm.get("match_date")
+        return dt if isinstance(dt, datetime) else None
+
+    dated = [m for m in team_matches if _dt(m) is not None]
+    undated = [m for m in team_matches if _dt(m) is None]
+    dated.sort(key=lambda m: _dt(m))
+    ordered = dated + undated
+
+    # 3) slice last N
+    if not n_last or n_last >= len(ordered):
+        return {"matches": ordered}
+    return {"matches": ordered[-int(n_last):]}
+    
 
 
 def _safe_float(x: Any) -> Optional[float]:

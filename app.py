@@ -17,6 +17,12 @@ import streamlit as st
 
 import opp_analysis_new as oa
 import update_database as upd
+import os
+import streamlit as st
+
+os.environ["GITHUB_TOKEN"] = st.secrets["GITHUB_TOKEN"]
+os.environ["GITHUB_REPO"] = st.secrets["GITHUB_REPO"]
+os.environ["GITHUB_BRANCH"] = st.secrets.get("GITHUB_BRANCH", "main")
 
 st.set_page_config(page_title="Opponent Analysis - Set Pieces", layout="wide")
 

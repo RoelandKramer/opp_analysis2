@@ -175,22 +175,30 @@ def _canon_team(name: Any) -> Optional[str]:
     return TEAM_NAME_MAPPING.get(s, s)
 
 def debug_used_matches(json_data: Dict[str, Any], selected_team_name: str) -> pd.DataFrame:
-    rows = []
-    for match in json_data.get("matches", []):
-        mid = match.get("match_id")
+    """
+    Debug why matches are (not) counted in process_corner_data for a team.
+    Returns one row per match with counts and the first "reason" it would be skipped.
+    """
+    rows: List[Dict[str, Any]] = []
+
+    for match in json_data.get("matches", []) or []:
+        mid = str(match.get("match_id", ""))
         mname = match.get("match_name")
         events = match.get("corner_events", []) or []
+
         if not events:
             rows.append({
                 "match_id": mid,
                 "match_name": mname,
                 "events": 0,
+                "teams_in_match": 0,
                 "team_present": False,
                 "corner_starts_found": 0,
                 "reason": "no_events",
             })
             continue
 
+        # teams found in match
         match_teams = set()
         for ev in events:
             c = get_canonical_team(ev.get("teamName"))
@@ -203,29 +211,39 @@ def debug_used_matches(json_data: Dict[str, Any], selected_team_name: str) -> pd
                 "match_id": mid,
                 "match_name": mname,
                 "events": len(events),
+                "teams_in_match": len(match_teams),
                 "team_present": False,
                 "corner_starts_found": 0,
-                "reason": "team_not_present_in_match",
+                "reason": "team_not_in_match_teams",
             })
             continue
 
+        # count "true corner starts" as your process_corner_data would
         corner_starts = 0
-        corner_starts_seqStart_types = set()
+        corner_starts_truthy = 0
 
-        for ev in events:
-            if ev.get("possessionTypeName") == "CORNER":
-                corner_starts_seqStart_types.add(type(ev.get("sequenceStart")).__name__)
-            if _is_true_corner_start(ev):
+        for e in events:
+            # useful to see if sequenceStart formatting is the problem
+            if e.get("possessionTypeName") == "CORNER":
                 corner_starts += 1
+                if _is_true_corner_start(e):
+                    corner_starts_truthy += 1
 
-        reason = "ok" if corner_starts > 0 else "no_true_corner_starts"
+        reason = "ok"
+        if corner_starts_truthy == 0:
+            reason = "no_true_corner_starts"
+
         rows.append({
             "match_id": mid,
             "match_name": mname,
             "events": len(events),
+            "teams_in_match": len(match_teams),
             "team_present": True,
-            "corner_starts_found": corner_starts,
-            "sequenceStart_types_seen": ", ".join(sorted(corner_starts_seqStart_types)) if corner_starts_seqStart_types else "",
+            "corner_events_found": corner_starts,
+            "corner_starts_found": corner_starts_truthy,
+            "example_sequenceStart_values": ",".join(
+                sorted({str(e.get("sequenceStart")) for e in events if e.get("possessionTypeName") == "CORNER"}))[:200]
+            ,
             "reason": reason,
         })
 

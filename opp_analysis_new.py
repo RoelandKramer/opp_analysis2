@@ -660,7 +660,7 @@ def process_corner_data(json_data: Dict[str, Any], selected_team_name: str) -> D
         sequences_by_id = defaultdict(list)
 
         for ev in events:
-            if ev.get("sequenceId"):
+            if ev.get("sequenceId") is not None:
                 sequences_by_id[ev["sequenceId"]].append(ev)
 
         for e in events:
@@ -685,11 +685,9 @@ def process_corner_data(json_data: Dict[str, Any], selected_team_name: str) -> D
 
             zone_end = _assign_zone(float(ex), float(ey), local_zones) or _assign_zone(-float(ex), -float(ey), local_zones)
             e["zone"], e["corner_side"] = zone_end, e_side
-
-            seq_has_shot = False
+        
             seq_id = e.get("sequenceId")
-            if seq_id:
-                seq_has_shot = _sequence_has_shot(sequences_by_id[seq_id])
+            seq_has_shot = _sequence_has_shot(sequences_by_id.get(seq_id, [])) if (seq_id is not None) else False
             e["seq_has_shot"] = bool(seq_has_shot)
 
             if e_side == "left":
@@ -697,8 +695,10 @@ def process_corner_data(json_data: Dict[str, Any], selected_team_name: str) -> D
             else:
                 (own_right_side if is_own else opponent_right_side).append(e)
 
-            if seq_id:
-                seq_evs = sequences_by_id[seq_id]
+            if seq_id is not None:
+                seq_evs = sequences_by_id.get(seq_id, [])
+                if not seq_evs:
+                    continue
                 key = (match.get("match_id"), seq_id, is_own)
                 if key not in _seen_seq_keys:
                     _seen_seq_keys.add(key)
@@ -768,7 +768,7 @@ def compute_league_attacking_corner_shot_rates(json_data: Dict[str, Any]) -> Dic
 
         sequences_by_id = defaultdict(list)
         for ev in events:
-            if ev.get("sequenceId"):
+            if ev.get("sequenceId") is not None:
                 sequences_by_id[ev["sequenceId"]].append(ev)
 
         for e in events:
@@ -803,7 +803,7 @@ def compute_league_attacking_corner_shot_rates(json_data: Dict[str, Any]) -> Dic
                 continue
             seen_corner_keys.add(corner_key)
 
-            seq_has_shot = _sequence_has_shot(sequences_by_id.get(seq_id, [])) if seq_id else False
+            seq_has_shot = _sequence_has_shot(sequences_by_id.get(seq_id, [])) if (seq_id is not None) else False
 
             bucket = _ensure_bucket(team, side, zone_end)
             bucket["total"] = int(bucket["total"]) + 1
@@ -1300,259 +1300,6 @@ def _gk_player_ids(events_df: pd.DataFrame, team_canon: str) -> set[int]:
         & (events_df["positionTypeName"] == "GK")
     ]
     return {int(pid) for pid in pd.to_numeric(gk["playerId"], errors="coerce").dropna().astype(int).unique()}
-
-
-def build_attacking_corners_player_table(
-    *,
-    team: str,
-    events_df: pd.DataFrame,
-    pos_times: Dict[Tuple[str, str], np.ndarray],
-    pos_frames: Dict[Tuple[str, str, int], dict],
-) -> pd.DataFrame:
-    team_c = _canon_team(team) or team
-    name_map = _build_player_name_map(events_df)
-    team_pids = _team_player_ids(events_df, team_c)
-    gk_pids = _gk_player_ids(events_df, team_c)
-    team_pids = {pid for pid in team_pids if pid not in gk_pids}
-
-    corners_on_pitch = Counter()
-    headshots = Counter()
-    headgoals = Counter()
-    jersey_sets: Dict[int, set[int]] = defaultdict(set)
-
-    df = events_df.copy()
-
-    if "source_event_file" not in df.columns:
-        raise ValueError("events_df must contain 'source_event_file'")
-    for col in ("corner_sequence_id", "corner_startTimeMs"):
-        if col not in df.columns:
-            raise ValueError(f"events_df must contain '{col}'")
-
-    df["match_id_from_file"] = df["source_event_file"].apply(_match_id_from_path)
-    df["match_id_from_file"] = df["match_id_from_file"].astype(str)
-    df["corner_sequence_id"] = df["corner_sequence_id"].astype(str)
-    df["corner_startTimeMs"] = pd.to_numeric(df["corner_startTimeMs"], errors="coerce").astype("Int64")
-    df = df.dropna(subset=["corner_startTimeMs"]).copy()
-
-    key_cols = ["match_id_from_file", "corner_sequence_id", "corner_startTimeMs"]
-
-    for (mid, seq_id, t0), seq in df.groupby(key_cols, dropna=False):
-        start_rows = seq[(seq["possessionTypeName"] == "CORNER") & (seq["sequenceStart"] == True)]
-        if start_rows.empty:
-            continue
-        start = start_rows.iloc[0]
-        attacking_team_raw = start.get("teamName")
-        if _canon_team(attacking_team_raw) != team_c:
-            continue
-
-        times = pos_times.get((mid, seq_id))
-        if times is None or times.size == 0:
-            continue
-
-        t_near = _nearest_time(int(t0), times)
-        if t_near is None:
-            continue
-        frame_start = pos_frames.get((mid, seq_id, int(t_near)))
-        if not isinstance(frame_start, dict):
-            continue
-
-        home, away = _infer_home_away_from_seq_df(seq)
-        taker_id = _safe_int(start.get("playerId"), -1)
-        attacker_side, _ = _infer_sides_from_frame(
-            frame=frame_start,
-            corner_taker_id=taker_id if taker_id >= 0 else None,
-            attacking_team=str(attacking_team_raw) if isinstance(attacking_team_raw, str) else "",
-            home=home,
-            away=away,
-        )
-        if attacker_side not in ("h", "a"):
-            continue
-
-        for p in _frame_players(frame_start, attacker_side):
-            pid = _safe_int(p.get("p"), -1)
-            if pid < 0 or pid not in team_pids:
-                continue
-            corners_on_pitch[pid] += 1
-            s = _safe_int(p.get("s"), -1)
-            if s > 0:
-                jersey_sets[pid].add(s)
-
-        for _, r in seq.iterrows():
-            if _canon_team(r.get("teamName")) != team_c:
-                continue
-            pid = _safe_int(r.get("playerId"), -1)
-            if pid < 0 or pid not in team_pids:
-                continue
-            if _is_header_shot_row(r):
-                headshots[pid] += 1
-                if _is_goal_row(r):
-                    headgoals[pid] += 1
-
-    rows = []
-    for pid, onp in corners_on_pitch.items():
-        rows.append(
-            {
-                "player_name": name_map.get(pid, f"player_{pid}"),
-                "jerseynumber(s)": ",".join(map(str, sorted(jersey_sets.get(pid, set())))) or "-",
-                "CornersOnPitch": int(onp),
-                "Headshots": int(headshots.get(pid, 0)),
-                "HeadGoals": int(headgoals.get(pid, 0)),
-            }
-        )
-    out = pd.DataFrame(rows)
-    if out.empty:
-        return out
-    return out.sort_values(["CornersOnPitch", "Headshots", "HeadGoals"], ascending=[False, False, False]).reset_index(drop=True)
-
-
-def build_defending_corners_player_table(
-    *,
-    team: str,
-    events_df: pd.DataFrame,
-    pos_times: Dict[Tuple[str, str], np.ndarray],
-    pos_frames: Dict[Tuple[str, str, int], dict],
-) -> pd.DataFrame:
-    team_c = _canon_team(team) or team
-    name_map = _build_player_name_map(events_df)
-    team_pids = _team_player_ids(events_df, team_c)
-    gk_pids = _gk_player_ids(events_df, team_c)
-    team_pids = {pid for pid in team_pids if pid not in gk_pids}
-
-    corners_on_pitch = Counter()
-    faults = Counter()
-    goals_allowed = Counter()
-    clearances = Counter()
-    jersey_sets: Dict[int, set[int]] = defaultdict(set)
-
-    df = events_df.copy()
-
-    if "source_event_file" not in df.columns:
-        raise ValueError("events_df must contain 'source_event_file'")
-    for col in ("corner_sequence_id", "corner_startTimeMs"):
-        if col not in df.columns:
-            raise ValueError(f"events_df must contain '{col}'")
-
-    df["match_id_from_file"] = df["source_event_file"].apply(_match_id_from_path)
-    df["match_id_from_file"] = df["match_id_from_file"].astype(str)
-    df["corner_sequence_id"] = df["corner_sequence_id"].astype(str)
-    df["corner_startTimeMs"] = pd.to_numeric(df["corner_startTimeMs"], errors="coerce").astype("Int64")
-    df = df.dropna(subset=["corner_startTimeMs"]).copy()
-
-    key_cols = ["match_id_from_file", "corner_sequence_id", "corner_startTimeMs"]
-
-    for (mid, seq_id, t0), seq in df.groupby(key_cols, dropna=False):
-        start_rows = seq[(seq["possessionTypeName"] == "CORNER") & (seq["sequenceStart"] == True)]
-        if start_rows.empty:
-            continue
-        start = start_rows.iloc[0]
-        attacking_team_raw = start.get("teamName")
-        attacking_c = _canon_team(attacking_team_raw)
-
-        if attacking_c is None or attacking_c == team_c:
-            continue
-
-        times = pos_times.get((mid, seq_id))
-        if times is None or times.size == 0:
-            continue
-
-        t_start = _nearest_time(int(t0), times)
-        if t_start is None:
-            continue
-        frame_start = pos_frames.get((mid, seq_id, int(t_start)))
-        if not isinstance(frame_start, dict):
-            continue
-
-        home, away = _infer_home_away_from_seq_df(seq)
-        taker_id = _safe_int(start.get("playerId"), -1)
-        attacker_side, defender_side = _infer_sides_from_frame(
-            frame=frame_start,
-            corner_taker_id=taker_id if taker_id >= 0 else None,
-            attacking_team=str(attacking_team_raw) if isinstance(attacking_team_raw, str) else "",
-            home=home,
-            away=away,
-        )
-        if attacker_side not in ("h", "a") or defender_side not in ("h", "a"):
-            continue
-
-        defenders_on_pitch: set[int] = set()
-        for p in _frame_players(frame_start, defender_side):
-            pid = _safe_int(p.get("p"), -1)
-            if pid < 0 or pid not in team_pids:
-                continue
-            defenders_on_pitch.add(pid)
-            corners_on_pitch[pid] += 1
-            s = _safe_int(p.get("s"), -1)
-            if s > 0:
-                jersey_sets[pid].add(s)
-
-        for _, r in seq.iterrows():
-            if _canon_team(r.get("teamName")) != team_c:
-                continue
-            if (r.get("baseTypeName") == "CLEARANCE") or (_safe_int(r.get("baseTypeId"), -1) == 10):
-                pid = _safe_int(r.get("playerId"), -1)
-                if pid >= 0 and pid in team_pids:
-                    clearances[pid] += 1
-
-        shots = seq[seq.apply(_is_shot_row, axis=1)]
-        if shots.empty:
-            continue
-        shots = shots.copy()
-        shots["_t"] = shots.apply(lambda rr: _safe_int(rr.get("startTimeMs"), -1), axis=1)
-        shots = shots[shots["_t"] >= 0].sort_values("_t")
-        if shots.empty:
-            continue
-        shot = shots.iloc[-1]
-        if _canon_team(shot.get("teamName")) != attacking_c:
-            continue
-
-        shot_t = _safe_int(shot.get("startTimeMs"), -1)
-        shooter_id = _safe_int(shot.get("playerId"), -1)
-        if shot_t < 0 or shooter_id < 0:
-            continue
-
-        t_shot = _nearest_time(int(shot_t), times)
-        if t_shot is None:
-            continue
-        frame_shot = pos_frames.get((mid, seq_id, int(t_shot)))
-        if not isinstance(frame_shot, dict):
-            continue
-
-        closest = _closest_defender(
-            frame_shot,
-            attacker_side=attacker_side,
-            attacker_pid=int(shooter_id),
-            defender_side=defender_side,
-            allowed_defender_ids=team_pids,
-        )
-        if not closest:
-            continue
-
-        closest_pid, closest_jersey, _ = closest
-        if closest_pid not in defenders_on_pitch:
-            continue
-
-        faults[closest_pid] += 1
-        if _is_goal_row(shot):
-            goals_allowed[closest_pid] += 1
-        if closest_jersey is not None:
-            jersey_sets[closest_pid].add(int(closest_jersey))
-
-    rows = []
-    for pid, onp in corners_on_pitch.items():
-        rows.append(
-            {
-                "player_name": name_map.get(pid, f"player_{pid}"),
-                "jerseynumber(s)": ",".join(map(str, sorted(jersey_sets.get(pid, set())))) or "-",
-                "CornersOnPitch": int(onp),
-                "Faults": int(faults.get(pid, 0)),
-                "GoalsAllowed": int(goals_allowed.get(pid, 0)),
-                "Clearances": int(clearances.get(pid, 0)),
-            }
-        )
-    out = pd.DataFrame(rows)
-    if out.empty:
-        return out
-    return out.sort_values(["CornersOnPitch", "Faults", "GoalsAllowed", "Clearances"], ascending=[False, False, False, False]).reset_index(drop=True)
 
 
 def filter_headers_for_team(headers_df: pd.DataFrame, team: str) -> pd.DataFrame:

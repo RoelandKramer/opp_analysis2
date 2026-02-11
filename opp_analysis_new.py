@@ -508,10 +508,6 @@ def _sequence_has_shot(seq: List[Dict[str, Any]]) -> bool:
     return any(ev.get("baseTypeName") == "SHOT" or _safe_int(ev.get("baseTypeId"), -1) == 6 for ev in seq)
 
 
-def _is_true_corner_start(ev: Dict[str, Any]) -> bool:
-    return ev.get("possessionTypeName") == "CORNER" and ev.get("sequenceStart") is True
-
-
 def _valid_zone_for_shot_lists(zone_val: Any) -> bool:
     return bool(zone_val and str(zone_val).strip() and zone_val != "Short_Corner_Zone")
 

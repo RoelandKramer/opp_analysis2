@@ -314,7 +314,21 @@ def upsert_df_by_match_id(
 # -----------------------------
 # GitHub push helper
 # -----------------------------
-def git_commit_and_push_csvs(*, repo_root: Path, files_to_commit: List[Path], commit_message: str) -> Tuple[bool, str]:
+def git_commit_and_push_csvs(
+    *,
+    repo_root: Path,
+    files_to_commit: List[Path],
+    commit_message: str,
+) -> Tuple[bool, str]:
+    """
+    Robust commit+push for Streamlit Cloud.
+    - Handles detached HEAD by fetching and checking out the branch properly
+    - Captures stderr for debugging
+    """
+    import os
+    import subprocess
+    from pathlib import Path
+
     token = os.getenv("GITHUB_TOKEN", "").strip()
     repo = os.getenv("GITHUB_REPO", "").strip()
     branch = os.getenv("GITHUB_BRANCH", "main").strip()
@@ -322,35 +336,68 @@ def git_commit_and_push_csvs(*, repo_root: Path, files_to_commit: List[Path], co
     if not token or not repo:
         return False, "Missing GITHUB_TOKEN or GITHUB_REPO env vars"
 
+    repo_root = Path(repo_root).resolve()
+
+    def run(cmd: List[str]) -> Tuple[int, str]:
+        p = subprocess.run(
+            cmd,
+            cwd=str(repo_root),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+        )
+        return p.returncode, p.stdout.strip()
+
     try:
-        repo_root = Path(repo_root).resolve()
+        # sanity: must be a git repo
+        rc, out = run(["git", "rev-parse", "--is-inside-work-tree"])
+        if rc != 0:
+            return False, f"Not a git repo at {repo_root}. git says: {out}"
 
-        subprocess.check_call(["git", "-C", str(repo_root), "config", "user.email", "bot@streamlit.local"])
-        subprocess.check_call(["git", "-C", str(repo_root), "config", "user.name", "streamlit-bot"])
+        # identity
+        run(["git", "config", "user.email", "bot@streamlit.local"])
+        run(["git", "config", "user.name", "streamlit-bot"])
 
+        # authenticated remote
         remote_url = f"https://{token}@github.com/{repo}.git"
-        subprocess.check_call(["git", "-C", str(repo_root), "remote", "set-url", "origin", remote_url])
+        run(["git", "remote", "set-url", "origin", remote_url])
 
-        # Make sure branch is current
-        subprocess.check_call(["git", "-C", str(repo_root), "fetch", "origin", branch])
-        subprocess.check_call(["git", "-C", str(repo_root), "checkout", branch])
-        subprocess.check_call(["git", "-C", str(repo_root), "pull", "--rebase", "origin", branch])
+        # fetch + checkout branch robustly (fixes detached HEAD)
+        run(["git", "fetch", "origin", branch])
+        rc, out = run(["git", "checkout", "-B", branch, f"origin/{branch}"])
+        if rc != 0:
+            # fallback: create local branch if remote ref not present
+            rc2, out2 = run(["git", "checkout", "-B", branch])
+            if rc2 != 0:
+                return False, f"Checkout failed:\n{out}\n{out2}"
 
-        # Add files (MUST be repo-relative)
+        # add files (use paths relative to repo_root)
         for f in files_to_commit:
-            f_abs = Path(f).resolve()
-            rel = f_abs.relative_to(repo_root)
-            subprocess.check_call(["git", "-C", str(repo_root), "add", str(rel)])
+            f = Path(f).resolve()
+            try:
+                rel = f.relative_to(repo_root)
+            except Exception:
+                rel = f  # fallback
+            rc, out = run(["git", "add", str(rel)])
+            if rc != 0:
+                return False, f"git add failed for {rel}:\n{out}"
 
-        # If nothing changed, stop
-        status = subprocess.check_output(["git", "-C", str(repo_root), "status", "--porcelain"]).decode("utf-8").strip()
-        if not status:
-            return True, "No changes to commit (already up to date)"
+        # if nothing changed, stop early
+        rc, status_out = run(["git", "status", "--porcelain"])
+        if rc == 0 and not status_out.strip():
+            return True, "No changes to commit (working tree clean)"
 
-        subprocess.check_call(["git", "-C", str(repo_root), "commit", "-m", commit_message])
-        subprocess.check_call(["git", "-C", str(repo_root), "push", "origin", branch])
+        # commit
+        rc, out = run(["git", "commit", "-m", commit_message])
+        if rc != 0:
+            return False, f"git commit failed:\n{out}"
 
-        return True, "Pushed to GitHub"
+        # push
+        rc, out = run(["git", "push", "origin", branch])
+        if rc != 0:
+            return False, f"git push failed:\n{out}"
+
+        return True, f"Pushed to {repo}@{branch}"
     except Exception as e:
         return False, str(e)
 

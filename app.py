@@ -502,5 +502,5 @@ if json_data_full and selected_team:
                 fig_def = oa.plot_defending_corner_players_diverging(df_team, max_players=15)
                 st.pyplot(style_fig_bg(fig_def, APP_BG), clear_figure=True)
 
-)
+
 

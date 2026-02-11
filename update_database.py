@@ -314,12 +314,7 @@ def upsert_df_by_match_id(
 # -----------------------------
 # GitHub push helper
 # -----------------------------
-def git_commit_and_push_csvs(
-    *,
-    repo_root: Path,
-    files_to_commit: List[Path],
-    commit_message: str,
-) -> Tuple[bool, str]:
+def git_commit_and_push_csvs(*, repo_root: Path, files_to_commit: List[Path], commit_message: str) -> Tuple[bool, str]:
     token = os.getenv("GITHUB_TOKEN", "").strip()
     repo = os.getenv("GITHUB_REPO", "").strip()
     branch = os.getenv("GITHUB_BRANCH", "main").strip()
@@ -335,19 +330,30 @@ def git_commit_and_push_csvs(
 
         remote_url = f"https://{token}@github.com/{repo}.git"
         subprocess.check_call(["git", "-C", str(repo_root), "remote", "set-url", "origin", remote_url])
-        subprocess.call(["git", "-C", str(repo_root), "checkout", branch])
 
+        # Make sure branch is current
+        subprocess.check_call(["git", "-C", str(repo_root), "fetch", "origin", branch])
+        subprocess.check_call(["git", "-C", str(repo_root), "checkout", branch])
+        subprocess.check_call(["git", "-C", str(repo_root), "pull", "--rebase", "origin", branch])
+
+        # Add files (MUST be repo-relative)
         for f in files_to_commit:
-            subprocess.check_call(["git", "-C", str(repo_root), "add", str(Path(f).resolve())])
+            f_abs = Path(f).resolve()
+            rel = f_abs.relative_to(repo_root)
+            subprocess.check_call(["git", "-C", str(repo_root), "add", str(rel)])
 
-        commit_rc = subprocess.call(["git", "-C", str(repo_root), "commit", "-m", commit_message])
-        if commit_rc != 0:
+        # If nothing changed, stop
+        status = subprocess.check_output(["git", "-C", str(repo_root), "status", "--porcelain"]).decode("utf-8").strip()
+        if not status:
             return True, "No changes to commit (already up to date)"
 
+        subprocess.check_call(["git", "-C", str(repo_root), "commit", "-m", commit_message])
         subprocess.check_call(["git", "-C", str(repo_root), "push", "origin", branch])
+
         return True, "Pushed to GitHub"
     except Exception as e:
         return False, str(e)
+
 
 
 # -----------------------------

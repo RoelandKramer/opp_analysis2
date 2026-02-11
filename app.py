@@ -314,14 +314,7 @@ if show_matches_used:
     st.sidebar.write(f"Matches used: {len(df_used)}")
     st.sidebar.dataframe(df_used[["match_name"]], use_container_width=True, hide_index=True)
 
-# Latest match caption should reflect FULL dataset (not filtered)
-latest_dt, latest_name = oa.get_latest_match_info(json_data_full)
-st.sidebar.markdown("---")
-st.sidebar.caption(
-    f"Latest match in dataset: {latest_dt.strftime('%d-%m-%Y')} — {latest_name}"
-    if latest_dt and latest_name
-    else "Latest match in dataset: -"
-)
+
 
 # --- ADD DATA ---
 st.sidebar.markdown("---")
@@ -390,6 +383,15 @@ if run_update:
         else:
             st.sidebar.error(f"❌ Update failed: {result.get('error', 'Unknown error')}")
             st.sidebar.write(result)
+
+# Latest match caption should reflect FULL dataset (not filtered)
+latest_dt, latest_name = oa.get_latest_match_info(json_data_full)
+st.sidebar.markdown("---")
+st.sidebar.caption(
+    f"Latest match in dataset: {latest_dt.strftime('%d-%m-%Y')} — {latest_name}"
+    if latest_dt and latest_name
+    else "Latest match in dataset: -"
+)
 
 # ---------------- Main analysis ----------------
 if json_data_view and selected_team:

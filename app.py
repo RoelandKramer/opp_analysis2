@@ -357,13 +357,13 @@ if run_update:
             st.sidebar.write(result)
 
 # ---------------- Main analysis ----------------
-if json_data and selected_team:
+if json_data_full and selected_team:
     cache_key = (st.session_state.dataset_version, selected_team, n_last)
 
     if cache_key not in st.session_state.analysis_cache:
         with st.spinner(f"Analyzing {selected_team}..."):
-            results = get_analysis_results(json_data, selected_team)
-            league_stats = get_league_stats(json_data)
+            results = get_analysis_results(json_data_full, selected_team)
+            league_stats = get_league_stats(json_data_full)
             viz_config = oa.get_visualization_coords()
 
         st.session_state.analysis_cache[cache_key] = {

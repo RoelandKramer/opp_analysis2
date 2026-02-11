@@ -211,12 +211,35 @@ if not os.path.exists(CORNER_EVENTS_CSV):
     st.stop()
 
 json_data = load_corner_jsonlike(CORNER_EVENTS_CSV)
+# --- Match window slider (default = all) ---
+matches_all = json_data.get("matches", []) or []
+
+# Count only dated matches for nicer UX (but slider will still limit overall list)
+total_matches = len(matches_all)
+
+n_last = st.sidebar.slider(
+    "Analyze last X matches",
+    min_value=1,
+    max_value=max(total_matches, 1),
+    value=total_matches,   # default = all matches loaded
+    step=1,
+)
+
+json_data = oa.filter_last_n_matches(json_data, n_last)
+
 all_teams = get_team_list(json_data)
 if not all_teams:
     st.error("❌ No teams found in dataset.")
     st.stop()
 
 selected_team = st.sidebar.selectbox("Select team", all_teams)
+all_matches = st.sidebar.checkbox("Use all matches", value=True)
+
+if all_matches:
+    json_data_view = json_data
+else:
+    n_last = st.sidebar.slider("Analyze last X matches", 1, total_matches, min(10, total_matches))
+    json_data_view = oa.filter_last_n_matches(json_data, n_last)
 
 latest_dt, latest_name = oa.get_latest_match_info(json_data)
 st.sidebar.markdown("---")
@@ -230,6 +253,7 @@ st.sidebar.caption(
 # --- ADD DATA ---
 st.sidebar.markdown("---")
 st.sidebar.subheader("Add data")
+
 
 # 1) one uploader with a resettable key (so it clears visually)
 if "uploader_key" not in st.session_state:

@@ -1416,8 +1416,15 @@ def plot_defending_corner_players_diverging(
     if "player_name" not in df.columns:
         df["player_name"] = "Unknown"
 
+    # --- NEW: Prepend jersey number ('s') to player_name ---
+    if "s" in df.columns:
+        # Convert to int to strip decimals, handling NaNs safely
+        s_clean = pd.to_numeric(df["s"], errors="coerce").fillna(-1).astype(int)
+        mask = s_clean != -1
+        # Apply the formatting: "7. Player Name"
+        df.loc[mask, "player_name"] = s_clean[mask].astype(str) + ". " + df.loc[mask, "player_name"]
+
     # --- Map your columns -> expected plotting columns ---
-    # If user already passed Faults/GoalsAllowed/Clearances, keep them.
     if "Clearances" not in df.columns:
         df["Clearances"] = df.get("Defending_corners_defended", 0)
 
@@ -1425,7 +1432,6 @@ def plot_defending_corner_players_diverging(
         df["GoalsAllowed"] = df.get("Defending_corners_fatal_errors", 0)
 
     if "Faults" not in df.columns:
-        # Treat "fatal errors" as a subset of errors that led to a goal
         df["Faults"] = df.get("Defending_corners_errors", 0) + df.get("Defending_corners_fatal_errors", 0)
 
     # --- Ensure numeric ---
@@ -1495,7 +1501,6 @@ def plot_defending_corner_players_diverging(
     fig.tight_layout()
     return fig
 
-
 def plot_attacking_corner_players_headers(
     att_tbl: pd.DataFrame,
     *,
@@ -1519,6 +1524,12 @@ def plot_attacking_corner_players_headers(
 
     if "player_name" not in df.columns:
         df["player_name"] = "Unknown"
+
+    # --- NEW: Prepend jersey number ('s') to player_name ---
+    if "s" in df.columns:
+        s_clean = pd.to_numeric(df["s"], errors="coerce").fillna(-1).astype(int)
+        mask = s_clean != -1
+        df.loc[mask, "player_name"] = s_clean[mask].astype(str) + ". " + df.loc[mask, "player_name"]
 
     # --- Map your columns -> expected plotting columns ---
     if "Headshots" not in df.columns:
@@ -1574,7 +1585,6 @@ def plot_attacking_corner_players_headers(
     ax.legend(loc="lower right")
     fig.tight_layout()
     return fig
-
 
 def load_corner_positions_headers(csv_path: str) -> pd.DataFrame:
     if not os.path.exists(csv_path):

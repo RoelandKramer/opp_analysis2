@@ -1390,6 +1390,29 @@ def filter_headers_for_team(headers_df: pd.DataFrame, team: str) -> pd.DataFrame
     return df[df["__club_c"] == team_c].copy()
 
 
+# --- PATCH: add jersey number ("s") before player name in both charts ---
+# File: wherever these plotting funcs live (e.g. oa.py)
+
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+
+
+def _build_player_label(df: pd.DataFrame, *, number_col: str = "s") -> pd.Series:
+    """
+    Returns label like '7. Genrich Sillé' when jersey number exists.
+    Falls back to 'Genrich Sillé' if number is missing/invalid.
+    """
+    name = df.get("player_name", pd.Series(["Unknown"] * len(df), index=df.index)).astype(str)
+
+    if number_col not in df.columns:
+        return name
+
+    num = pd.to_numeric(df[number_col], errors="coerce")
+    num_str = num.apply(lambda x: "" if pd.isna(x) else str(int(x)))
+    return np.where(num_str != "", num_str + ". " + name, name)
+
+
 def plot_defending_corner_players_diverging(
     def_tbl: pd.DataFrame,
     *,
@@ -1402,7 +1425,7 @@ def plot_defending_corner_players_diverging(
       - Faults      <- Defending_corners_errors + Defending_corners_fatal_errors
       - GoalsAllowed<- Defending_corners_fatal_errors
 
-    Also auto-aggregates (sums) over multiple rows per player_name.
+    Also auto-aggregates (sums) over multiple rows per player_name (+ jersey number if present).
     """
     if def_tbl is None or def_tbl.empty:
         fig, ax = plt.subplots(figsize=(8, 3))
@@ -1412,19 +1435,9 @@ def plot_defending_corner_players_diverging(
 
     df = def_tbl.copy()
 
-    # Ensure player_name exists
     if "player_name" not in df.columns:
         df["player_name"] = "Unknown"
 
-    # --- NEW: Prepend jersey number ('s') to player_name ---
-    if "s" in df.columns:
-        # Convert to int to strip decimals, handling NaNs safely
-        s_clean = pd.to_numeric(df["s"], errors="coerce").fillna(-1).astype(int)
-        mask = s_clean != -1
-        # Apply the formatting: "7. Player Name"
-        df.loc[mask, "player_name"] = s_clean[mask].astype(str) + ". " + df.loc[mask, "player_name"]
-
-    # --- Map your columns -> expected plotting columns ---
     if "Clearances" not in df.columns:
         df["Clearances"] = df.get("Defending_corners_defended", 0)
 
@@ -1432,31 +1445,28 @@ def plot_defending_corner_players_diverging(
         df["GoalsAllowed"] = df.get("Defending_corners_fatal_errors", 0)
 
     if "Faults" not in df.columns:
-        df["Faults"] = df.get("Defending_corners_errors", 0) + df.get("Defending_corners_fatal_errors", 0)
+        df["Faults"] = df.get("Defending_corners_errors", 0) + df.get(
+            "Defending_corners_fatal_errors", 0
+        )
 
-    # --- Ensure numeric ---
     for c in ("Faults", "GoalsAllowed", "Clearances"):
         df[c] = pd.to_numeric(df.get(c, 0), errors="coerce").fillna(0).astype(int)
 
-    # --- Aggregate across rows (e.g., per match) ---
-    df = (
-        df.groupby("player_name", as_index=False)[["Faults", "GoalsAllowed", "Clearances"]]
-        .sum()
-    )
+    group_cols = ["player_name"] + (["s"] if "s" in df.columns else [])
+    df = df.groupby(group_cols, as_index=False)[["Faults", "GoalsAllowed", "Clearances"]].sum()
 
-    # Clamp: goalsAllowed cannot exceed faults
     df["GoalsAllowed"] = np.minimum(df["GoalsAllowed"], df["Faults"])
     df["Faults_non_goal"] = np.maximum(df["Faults"] - df["GoalsAllowed"], 0)
 
-    # Sort by sum of faults + clearances
     df["Total"] = df["Faults"] + df["Clearances"]
-    df = df.sort_values(["Total", "Faults", "Clearances"], ascending=[False, False, False]).head(max_players)
+    df = df.sort_values(["Total", "Faults", "Clearances"], ascending=[False, False, False]).head(
+        max_players
+    )
 
-    # Plot order (top = largest)
     df = df.iloc[::-1].reset_index(drop=True)
 
     y = np.arange(len(df))
-    names = df["player_name"].astype(str).tolist()
+    names = _build_player_label(df, number_col="s").tolist()
 
     faults_goal = df["GoalsAllowed"].to_numpy()
     faults_non_goal = df["Faults_non_goal"].to_numpy()
@@ -1465,11 +1475,8 @@ def plot_defending_corner_players_diverging(
     fig_h = max(3.5, 0.45 * len(df) + 1.2)
     fig, ax = plt.subplots(figsize=(10, fig_h))
 
-    # Left side (negative): first black (goal faults), then red (remaining faults)
     ax.barh(y, -faults_goal, color="black", label="Player they marked scored from corner")
     ax.barh(y, -faults_non_goal, left=-faults_goal, color="red", label="Player they marked shot from corner")
-
-    # Right side (positive): green clearances
     ax.barh(y, clearances, color="green", label="Clearances")
 
     ax.axvline(0, linewidth=1)
@@ -1501,6 +1508,7 @@ def plot_defending_corner_players_diverging(
     fig.tight_layout()
     return fig
 
+
 def plot_attacking_corner_players_headers(
     att_tbl: pd.DataFrame,
     *,
@@ -1512,7 +1520,7 @@ def plot_attacking_corner_players_headers(
       - Headshots <- Attacking_corners_headed
       - HeadGoals <- Attacking_corners_headed_and_scored
 
-    Also auto-aggregates (sums) over multiple rows per player_name.
+    Also auto-aggregates (sums) over multiple rows per player_name (+ jersey number if present).
     """
     if att_tbl is None or att_tbl.empty:
         fig, ax = plt.subplots(figsize=(8, 3))
@@ -1525,13 +1533,6 @@ def plot_attacking_corner_players_headers(
     if "player_name" not in df.columns:
         df["player_name"] = "Unknown"
 
-    # --- NEW: Prepend jersey number ('s') to player_name ---
-    if "s" in df.columns:
-        s_clean = pd.to_numeric(df["s"], errors="coerce").fillna(-1).astype(int)
-        mask = s_clean != -1
-        df.loc[mask, "player_name"] = s_clean[mask].astype(str) + ". " + df.loc[mask, "player_name"]
-
-    # --- Map your columns -> expected plotting columns ---
     if "Headshots" not in df.columns:
         df["Headshots"] = df.get("Attacking_corners_headed", 0)
 
@@ -1541,10 +1542,9 @@ def plot_attacking_corner_players_headers(
     for c in ("Headshots", "HeadGoals"):
         df[c] = pd.to_numeric(df.get(c, 0), errors="coerce").fillna(0).astype(int)
 
-    # --- Aggregate across rows (e.g., per match) ---
-    df = df.groupby("player_name", as_index=False)[["Headshots", "HeadGoals"]].sum()
+    group_cols = ["player_name"] + (["s"] if "s" in df.columns else [])
+    df = df.groupby(group_cols, as_index=False)[["Headshots", "HeadGoals"]].sum()
 
-    # Clamp goals <= headers
     df["HeadGoals"] = np.minimum(df["HeadGoals"], df["Headshots"])
     df["Headers_non_goal"] = np.maximum(df["Headshots"] - df["HeadGoals"], 0)
 
@@ -1552,7 +1552,7 @@ def plot_attacking_corner_players_headers(
     df = df.iloc[::-1].reset_index(drop=True)
 
     y = np.arange(len(df))
-    names = df["player_name"].astype(str).tolist()
+    names = _build_player_label(df, number_col="s").tolist()
 
     goals = df["HeadGoals"].to_numpy()
     rest = df["Headers_non_goal"].to_numpy()
@@ -1585,7 +1585,6 @@ def plot_attacking_corner_players_headers(
     ax.legend(loc="lower right")
     fig.tight_layout()
     return fig
-
 def load_corner_positions_headers(csv_path: str) -> pd.DataFrame:
     if not os.path.exists(csv_path):
         raise FileNotFoundError(f"corner_positions_headers.csv not found: {csv_path}")

@@ -199,15 +199,40 @@ def _color_background_rectangles(slide, *, bg_hex: str, slide_w: int, slide_h: i
 
 
 def _color_top_and_bottom_bars(slide, *, bar_hex: str, slide_w: int, slide_h: int) -> None:
-    # Color any bar-like shapes (top or bottom) with ABS coords
+    # 1) color any bar-like shapes by heuristic (ABS coords)
     for shp, ax, ay in iter_shapes_abs(slide):
         if _is_bar_candidate(ax, ay, shp, slide_w, slide_h):
             _set_shape_fill(shp, hex_color=bar_hex)
 
-    # Also color bottom-bar placeholder if present (keep its text)
+    # 2) additionally: FORCE top bar selection = widest shape in top 18% of slide
+    # This catches templates where the top bar isn't an AUTO_SHAPE/FREEFORM or doesn't meet thresholds.
+    top_region_max_y = int(slide_h * 0.18)
+    best_top = None  # (width, shape)
+    for shp, ax, ay in iter_shapes_abs(slide):
+        try:
+            w = int(shp.width)
+            h = int(shp.height)
+        except Exception:
+            continue
+
+        if ay > top_region_max_y:
+            continue
+        if w < int(slide_w * 0.65):  # must be fairly wide
+            continue
+        if h > int(slide_h * 0.25):  # avoid huge blocks
+            continue
+
+        # prefer "higher" (closer to top) if widths tie
+        key = (w, -ay)
+        if best_top is None or key > (best_top[0], -int(best_top[1].top)):
+            best_top = (w, shp)
+
+    if best_top is not None:
+        _set_shape_fill(best_top[1], hex_color=bar_hex)
+
+    # 3) ensure bottom-bar placeholder (if present) is colored (keep its text)
     for shp, _, _ in _find_shapes_with_token(slide, "{bottom_bar}"):
         _set_shape_fill(shp, hex_color=bar_hex)
-
 
 def _insert_image_over_shape(slide, shp, *, abs_left: int, abs_top: int, img_bytes: bytes) -> None:
     """

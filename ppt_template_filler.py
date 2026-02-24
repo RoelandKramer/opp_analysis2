@@ -7,14 +7,13 @@ import io
 import os
 import re
 from dataclasses import dataclass
-from typing import Dict, Iterable, List, Optional, Tuple
+from typing import Dict, Iterable, List, Optional
 
 import matplotlib.figure
 import pandas as pd
 from pptx import Presentation
 from pptx.dml.color import RGBColor
 from pptx.enum.shapes import MSO_SHAPE_TYPE
-from pptx.util import Emu
 
 
 _TOKEN_RE = re.compile(r"\{[^}]+\}")
@@ -24,10 +23,7 @@ def _hex_to_rgb(hex_color: str) -> RGBColor:
     s = (hex_color or "").strip().lstrip("#")
     if len(s) != 6:
         return RGBColor(255, 255, 255)
-    r = int(s[0:2], 16)
-    g = int(s[2:4], 16)
-    b = int(s[4:6], 16)
-    return RGBColor(r, g, b)
+    return RGBColor(int(s[0:2], 16), int(s[2:4], 16), int(s[4:6], 16))
 
 
 def fig_to_png_bytes(fig: matplotlib.figure.Figure, *, dpi: int = 220) -> bytes:
@@ -42,7 +38,7 @@ def _iter_shapes(slide) -> Iterable:
 
 
 def _shape_text(shp) -> str:
-    if not hasattr(shp, "has_text_frame") or not shp.has_text_frame:
+    if not getattr(shp, "has_text_frame", False):
         return ""
     try:
         return shp.text_frame.text or ""
@@ -63,7 +59,7 @@ def _replace_text_in_shape(shp, replacements: Dict[str, str]) -> None:
                 if k in txt:
                     txt = txt.replace(k, v)
             run.text = txt
-    tf.text = tf.text  # force refresh
+    tf.text = tf.text  # nudge refresh
 
 
 def _delete_shape(shp) -> None:
@@ -98,35 +94,38 @@ def _set_shape_fill(shp, *, hex_color: str) -> None:
 
 
 def _is_bar_candidate(shp, slide_w: int, slide_h: int) -> bool:
-    # Heuristic: wide rectangle near very top or bottom.
+    """
+    Heuristic: wide rectangle spanning most of slide width, near top or bottom.
+    """
     try:
         if shp.shape_type not in (MSO_SHAPE_TYPE.AUTO_SHAPE, MSO_SHAPE_TYPE.FREEFORM):
             return False
+
         w = int(shp.width)
         h = int(shp.height)
         x = int(shp.left)
         y = int(shp.top)
+
         if w < int(slide_w * 0.85):
             return False
         if h > int(slide_h * 0.12):
             return False
+
         near_top = y <= int(slide_h * 0.08)
         near_bottom = (y + h) >= int(slide_h * 0.92)
-        # ensure it's basically spanning slide
+
         return (near_top or near_bottom) and x <= int(slide_w * 0.08)
     except Exception:
         return False
 
 
-def _color_top_and_bottom_bars(slide, *, bar_hex: str) -> None:
-    slide_w = int(slide.part.presentation.slide_width)
-    slide_h = int(slide.part.presentation.slide_height)
-
+def _color_top_and_bottom_bars(slide, *, bar_hex: str, slide_w: int, slide_h: int) -> None:
+    # Color any top/bottom “bar-like” shapes
     for shp in _iter_shapes(slide):
         if _is_bar_candidate(shp, slide_w, slide_h):
             _set_shape_fill(shp, hex_color=bar_hex)
 
-    # Also color shape that carries {bottom_bar} token (but keep its text untouched)
+    # Also color the specific bottom-bar placeholder shape if present (keep its text)
     for shp in _find_shapes_with_token(slide, "{bottom_bar}"):
         _set_shape_fill(shp, hex_color=bar_hex)
 
@@ -142,42 +141,33 @@ def _fill_token_with_image(slide, token: str, images: List[bytes]) -> None:
     if not shapes or not images:
         return
 
-    # Stable ordering: left-to-right, then top-to-bottom
+    # stable ordering to match left->right placement if multiple placeholders share token
     shapes_sorted = sorted(shapes, key=lambda s: (int(s.left), int(s.top)))
     for shp, img in zip(shapes_sorted, images):
         _insert_image_over_shape(slide, shp, img)
 
 
-def _find_first_table(slide) -> Optional:
-    for shp in _iter_shapes(slide):
-        if getattr(shp, "has_table", False):
-            return shp.table
-    return None
-
-
 def _find_tables(slide) -> List:
-    tables = []
-    for shp in _iter_shapes(slide):
-        if getattr(shp, "has_table", False):
-            tables.append(shp.table)
-    return tables
+    return [shp.table for shp in _iter_shapes(slide) if getattr(shp, "has_table", False)]
 
 
 def _write_df_to_ppt_table(table, df: pd.DataFrame) -> None:
     if df is None:
         df = pd.DataFrame()
 
-    # Assumes first row is headers already in PPT.
     n_rows = len(table.rows)
     n_cols = len(table.columns)
 
-    values = df.astype(str).replace({"nan": "-", "None": "-"}).values.tolist() if not df.empty else []
-    max_write = max(0, n_rows - 1)
-
-    # Clear existing body
+    # Clear body
     for r in range(1, n_rows):
         for c in range(n_cols):
             table.cell(r, c).text = ""
+
+    if df.empty:
+        return
+
+    values = df.astype(str).replace({"nan": "-", "None": "-"}).values.tolist()
+    max_write = max(0, n_rows - 1)
 
     for r in range(min(max_write, len(values))):
         row_vals = values[r]
@@ -204,62 +194,56 @@ def fill_corner_template_pptx(
     right_takers_df: pd.DataFrame,
 ) -> FilledPptPayload:
     """
-    Fills the template:
-      - Slide backgrounds: secondary color
-      - Top + bottom bars: primary color
-      - {LOGO}: logo image
-      - plot tokens: replace with plot images
-      - tables: slide1 table=left takers, slide2 upper table=right takers
-      - replaces text tokens like {TEAM_NAME}, {nlc}, {nrc}, etc in all text shapes
-
-    Note: {bottom_bar} placeholder is NOT replaced with text; we only recolor its shape.
+    - Slide background: secondary color
+    - Top+bottom bars: primary color
+    - {LOGO}: replaced by image
+    - plot tokens: replaced by images
+    - Slide1 first table: left takers; Slide2 first table: right takers
+    - {bottom_bar} text is not replaced; its shape is only recolored
     """
     if not os.path.exists(template_pptx_path):
         raise FileNotFoundError(f"Template not found: {template_pptx_path}")
 
     prs = Presentation(template_pptx_path)
+    slide_w = int(prs.slide_width)
+    slide_h = int(prs.slide_height)
 
-    # Global text replacements
     base_repl = dict(meta_replacements or {})
     base_repl.setdefault("{TEAM_NAME}", team_name)
-    base_repl.setdefault("{{TEAM_NAME}}", team_name)  # tolerate accidental double braces
+    base_repl.setdefault("{{TEAM_NAME}}", team_name)
 
     for slide in prs.slides:
         _set_slide_background(slide, bg_hex=team_secondary_hex)
-        _color_top_and_bottom_bars(slide, bar_hex=team_primary_hex)
+        _color_top_and_bottom_bars(slide, bar_hex=team_primary_hex, slide_w=slide_w, slide_h=slide_h)
 
         for shp in _iter_shapes(slide):
             _replace_text_in_shape(shp, base_repl)
 
-        # Logo per-slide
+        # Logo
         if logo_path and os.path.exists(logo_path):
             with open(logo_path, "rb") as f:
                 logo_bytes = f.read()
-            logo_shapes = _find_shapes_with_token(slide, "{LOGO}")
-            for shp in logo_shapes:
+            for shp in _find_shapes_with_token(slide, "{LOGO}"):
                 _insert_image_over_shape(slide, shp, logo_bytes)
 
-        # Plot tokens per-slide
+        # Images
         for token, imgs in images_by_token.items():
             if token == "{bottom_bar}":
                 continue
             _fill_token_with_image(slide, token, imgs)
 
     # Tables
-    # Slide 1: first table -> left takers
     if len(prs.slides) >= 1:
-        tables = _find_tables(prs.slides[0])
-        if tables:
-            _write_df_to_ppt_table(tables[0], left_takers_df)
+        t1 = _find_tables(prs.slides[0])
+        if t1:
+            _write_df_to_ppt_table(t1[0], left_takers_df)
 
-    # Slide 2: first table -> right takers
     if len(prs.slides) >= 2:
-        tables = _find_tables(prs.slides[1])
-        if tables:
-            _write_df_to_ppt_table(tables[0], right_takers_df)
+        t2 = _find_tables(prs.slides[1])
+        if t2:
+            _write_df_to_ppt_table(t2[0], right_takers_df)
 
     out = io.BytesIO()
     prs.save(out)
     fname = f"OpponentAnalysis_Corners_{team_name.replace(' ', '_')}.pptx"
     return FilledPptPayload(pptx_bytes=out.getvalue(), filename=fname)
-

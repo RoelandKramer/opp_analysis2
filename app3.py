@@ -21,9 +21,6 @@ import streamlit as st
 import opp_analysis_new as oa
 import update_database as upd
 
-from ppt_template_filler import fill_corner_template_pptx, fig_to_png_bytes
-
-
 # --- Secrets -> env for git push (safe) ---
 if "GITHUB_TOKEN" in st.secrets:
     os.environ["GITHUB_TOKEN"] = st.secrets["GITHUB_TOKEN"]
@@ -31,18 +28,17 @@ if "GITHUB_REPO" in st.secrets:
     os.environ["GITHUB_REPO"] = st.secrets["GITHUB_REPO"]
 os.environ["GITHUB_BRANCH"] = st.secrets.get("GITHUB_BRANCH", "main")
 
-
 st.set_page_config(page_title="Opponent Analysis - Set Pieces", layout="wide")
 
 # Versioning so cache invalidates after DB update
 if "dataset_version" not in st.session_state:
     st.session_state.dataset_version = 0
 
+# Session cache so uploading files doesn’t recompute analysis
 if "analysis_cache" not in st.session_state:
     st.session_state.analysis_cache = {}  # key: (dataset_version, team, n_last) -> dict
 
 APP_BG = "#FFFFFF"
-TEMPLATE_PPTX = "template_opp_analysis.pptx"  # keep in repo root (same as your uploaded)
 
 
 @dataclass(frozen=True)
@@ -84,10 +80,99 @@ def build_team_themes() -> Dict[str, TeamTheme]:
     }
 
 
+def read_logo_as_base64(path: str) -> Optional[str]:
+    if not path or not os.path.exists(path):
+        return None
+    with open(path, "rb") as f:
+        return base64.b64encode(f.read()).decode("utf-8")
+
+
 def set_matplotlib_bg(bg_hex: str) -> None:
     mpl.rcParams["figure.facecolor"] = bg_hex
     mpl.rcParams["savefig.facecolor"] = bg_hex
     mpl.rcParams["axes.facecolor"] = bg_hex
+
+
+def style_fig_bg(fig, bg_hex: str):
+    try:
+        fig.patch.set_facecolor(bg_hex)
+        for ax in fig.axes:
+            ax.set_facecolor(bg_hex)
+    except Exception:
+        pass
+    return fig
+
+
+def apply_header(
+    team: str,
+    matches_analyzed: Optional[int],
+    themes: Dict[str, TeamTheme],
+    window_label: str = "Full Season",
+) -> TeamTheme:
+    
+    theme = themes.get(team) or TeamTheme("#111827", "#FFFFFF", f"logos/{slugify(team)}.png")
+    set_matplotlib_bg(APP_BG)
+
+    logo_b64 = read_logo_as_base64(theme.logo_relpath)
+    logo_html = (
+        f'<img class="team-logo" src="data:image/png;base64,{logo_b64}" alt="{team} logo" />'
+        if logo_b64
+        else ""
+    )
+
+    title_text_color = "#FFFFFF" if theme.top_hex.upper() != "#FFFFFF" else "#111827"
+    subtitle_color = "rgba(255,255,255,0.90)" if title_text_color == "#FFFFFF" else "rgba(17,24,39,0.85)"
+
+    matches_val = matches_analyzed if matches_analyzed is not None else "-"
+    meta_line = f"Matches Analyzed: {matches_val} | Window: {window_label} | Team: {team}"
+
+    st.markdown(
+        f"""
+        <style>
+          [data-testid="stAppViewContainer"] {{ background: {APP_BG}; }}
+          [data-testid="stHeader"] {{ background: transparent; }}
+          header {{ background: transparent !important; }}
+          [data-testid="stVerticalBlock"] > [data-testid="stVerticalBlockBorderWrapper"] {{ background: transparent; }}
+          div.block-container {{ padding-bottom: 28px; }}
+
+          .team-banner {{
+            position: relative; width: 100%; border-radius: 18px; overflow: hidden;
+            margin: 0.15rem 0 1.25rem 0; box-shadow: 0 10px 28px rgba(0,0,0,0.14);
+          }}
+          .team-banner-top {{ background: {theme.top_hex}; padding: 2.4rem 1.4rem 2.1rem 1.4rem; }}
+          .team-banner-bottom {{
+            background: {theme.rest_hex}; padding: 0.6rem 1.4rem 0.35rem 1.4rem;
+            min-height: 54px; display: flex; align-items: flex-end;
+          }}
+          .team-title {{
+            margin: 0; color: {title_text_color}; font-size: 1.75rem; font-weight: 900; letter-spacing: 0.2px;
+          }}
+          .team-subtitle {{ margin: 0.35rem 0 0 0; color: {subtitle_color}; font-size: 1.05rem; font-weight: 700; }}
+          .team-meta {{ margin: 0; color: #000000; font-size: 0.98rem; font-weight: 800; }}
+          .team-logo {{
+            position: absolute; top: 18px; right: 18px; height: 78px; width: 78px; object-fit: contain;
+            background: rgba(255,255,255,0.92); border-radius: 16px; padding: 9px;
+          }}
+          .team-footer-bar {{
+            position: fixed; left: 0; right: 0; bottom: 0; height: 14px; background: {theme.top_hex}; z-index: 9999;
+          }}
+        </style>
+
+        <div class="team-banner">
+          <div class="team-banner-top">
+            <p class="team-title">Opponent analysis - Set Pieces</p>
+            <p class="team-subtitle">{team}</p>
+            {logo_html}
+          </div>
+          <div class="team-banner-bottom">
+            <p class="team-meta">{meta_line}</p>
+          </div>
+        </div>
+        <div class="team-footer-bar"></div>
+        """,
+        unsafe_allow_html=True,
+    )
+    return theme
 
 
 CORNER_EVENTS_CSV = "data/corner_events_all_matches.csv"
@@ -155,6 +240,10 @@ def _match_dt(match: dict) -> datetime:
 
 
 def _save_uploads_to_batch(uploaded_files, batch_dir: Path) -> int:
+    """
+    Saves JSONs directly. If ZIPs are uploaded, extracts JSONs inside.
+    Returns number of JSON files written.
+    """
     json_count = 0
     for uf in uploaded_files or []:
         name = Path(uf.name).name
@@ -164,6 +253,7 @@ def _save_uploads_to_batch(uploaded_files, batch_dir: Path) -> int:
             out = batch_dir / name
             out.write_bytes(uf.getbuffer())
             json_count += 1
+
         elif suffix == ".zip":
             zbytes = io.BytesIO(uf.getbuffer())
             with zipfile.ZipFile(zbytes) as z:
@@ -176,269 +266,79 @@ def _save_uploads_to_batch(uploaded_files, batch_dir: Path) -> int:
                     out = batch_dir / mname
                     out.write_bytes(z.read(member))
                     json_count += 1
+
     return json_count
 
 
-def _center_container_css() -> None:
-    st.markdown(
-        """
-        <style>
-          [data-testid="stAppViewContainer"] { background: #FFFFFF; }
-          [data-testid="stHeader"] { background: transparent; }
-          header { background: transparent !important; }
-          section.main > div { padding-top: 1.25rem; padding-bottom: 5rem; }
-          .block-container { max-width: 1200px; }
-          div[data-testid="stVerticalBlock"] > div { gap: 0.75rem; }
-          .fixed-bottom {
-            position: fixed; left: 0; right: 0; bottom: 0;
-            background: rgba(255,255,255,0.92); backdrop-filter: blur(10px);
-            padding: 12px 18px; border-top: 1px solid rgba(0,0,0,0.08);
-            z-index: 9998;
-          }
-          .fixed-bottom-inner { max-width: 1200px; margin: 0 auto; }
-        </style>
-        """,
-        unsafe_allow_html=True,
-    )
-
-
-def _render_header(team: str, primary_hex: str, secondary_hex: str, logo_path: str, window_label: str, matches_analyzed: Optional[int]) -> None:
-    logo_b64 = None
-    if logo_path and os.path.exists(logo_path):
-        with open(logo_path, "rb") as f:
-            logo_b64 = base64.b64encode(f.read()).decode("utf-8")
-
-    title_text_color = "#FFFFFF" if (primary_hex or "").upper() != "#FFFFFF" else "#111827"
-    subtitle_color = "rgba(255,255,255,0.90)" if title_text_color == "#FFFFFF" else "rgba(17,24,39,0.85)"
-    matches_val = matches_analyzed if matches_analyzed is not None else "-"
-
-    st.markdown(
-        f"""
-        <style>
-          .team-banner {{
-            position: relative; width: 100%; border-radius: 18px; overflow: hidden;
-            margin: 0.15rem 0 1.0rem 0; box-shadow: 0 10px 28px rgba(0,0,0,0.14);
-          }}
-          .team-banner-top {{ background: {primary_hex}; padding: 2.0rem 1.4rem 1.7rem 1.4rem; }}
-          .team-banner-bottom {{
-            background: {secondary_hex}; padding: 0.55rem 1.4rem 0.4rem 1.4rem;
-            min-height: 52px; display: flex; align-items: flex-end;
-          }}
-          .team-title {{ margin: 0; color: {title_text_color}; font-size: 1.65rem; font-weight: 900; }}
-          .team-subtitle {{ margin: 0.35rem 0 0 0; color: {subtitle_color}; font-size: 1.05rem; font-weight: 750; }}
-          .team-meta {{ margin: 0; color: #000000; font-size: 0.98rem; font-weight: 800; }}
-          .team-logo {{
-            position: absolute; top: 16px; right: 16px; height: 74px; width: 74px; object-fit: contain;
-            background: rgba(255,255,255,0.92); border-radius: 16px; padding: 9px;
-          }}
-        </style>
-        <div class="team-banner">
-          <div class="team-banner-top">
-            <p class="team-title">Opponent analysis - Set Pieces</p>
-            <p class="team-subtitle">{team}</p>
-            {f'<img class="team-logo" src="data:image/png;base64,{logo_b64}" alt="{team} logo" />' if logo_b64 else ""}
-          </div>
-          <div class="team-banner-bottom">
-            <p class="team-meta">Matches Analyzed: {matches_val} | Window: {window_label} | Team: {team}</p>
-          </div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-
-def _generate_filled_pptx(
-    *,
-    json_data_full: dict,
-    selected_team: str,
-    n_last: int,
-    themes: Dict[str, TeamTheme],
-) -> Tuple[bytes, str]:
-    matches_full = json_data_full.get("matches", []) or []
-    team_matches_sorted = sorted(
-        [m for m in matches_full if _match_has_team(m, selected_team)],
-        key=_match_dt,
-        reverse=True,
-    )
-    team_total = len(team_matches_sorted)
-    if team_total == 0:
-        raise ValueError("No matches found for this team in the dataset.")
-
-    team_matches_window = team_matches_sorted[:n_last]
-    json_data_view = {"matches": team_matches_window}
-
-    cache_key = (st.session_state.dataset_version, selected_team, n_last)
-    if cache_key not in st.session_state.analysis_cache:
-        results = get_analysis_results(json_data_view, selected_team)
-        league_stats = get_league_stats(json_data_full)
-        viz_config = oa.get_visualization_coords()
-        st.session_state.analysis_cache[cache_key] = {
-            "results": results,
-            "league_stats": league_stats,
-            "viz_config": viz_config,
-        }
-    cached = st.session_state.analysis_cache[cache_key]
-    results = cached["results"]
-    league_stats = cached["league_stats"]
-    viz_config = cached["viz_config"]
-
-    theme = themes.get(selected_team) or TeamTheme("#111827", "#FFFFFF", f"logos/{slugify(selected_team)}.png")
-    set_matplotlib_bg("#FFFFFF")
-
-    # Plots -> PNG bytes
-    # Slide 1:
-    fig_att_L = oa.plot_percent_attacking(
-        get_img_path("att_L"),
-        viz_config["att_L"],
-        viz_config["att_centers_L"],
-        results["attacking"]["left_pct"],
-    )
-    fig_att_R = oa.plot_percent_attacking(
-        get_img_path("att_R"),
-        viz_config["att_R"],
-        viz_config["att_centers_R"],
-        results["attacking"]["right_pct"],
-    )
-
-    (tot_L, shot_L, pct_L) = results["attacking_shots"]["left"]
-    pctiles_L = oa.build_percentiles_for_team(league_stats, selected_team, "left", min_zone_corners=4)
-    fig_att_shots_L = oa.plot_shots_attacking_with_percentile(
-        get_img_path("def_L"),
-        viz_config["def_L"],
-        pct_L,
-        tot_L,
-        shot_L,
-        pctiles_L,
-        min_zone_corners=4,
-        font_size=16,
-    )
-
-    (tot_R, shot_R, pct_R) = results["attacking_shots"]["right"]
-    pctiles_R = oa.build_percentiles_for_team(league_stats, selected_team, "right", min_zone_corners=4)
-    fig_att_shots_R = oa.plot_shots_attacking_with_percentile(
-        get_img_path("def_R"),
-        viz_config["def_R"],
-        pct_R,
-        tot_R,
-        shot_R,
-        pctiles_R,
-        min_zone_corners=4,
-        font_size=16,
-    )
-
-    # Slide 2:
-    (tot_dL, ids_dL, pcts_dL) = results["defensive"]["left"]
-    fig_def_L = oa.plot_shots_defensive(get_img_path("def_L"), viz_config["def_L"], pcts_dL, tot_dL, ids_dL)
-
-    (tot_dR, ids_dR, pcts_dR) = results["defensive"]["right"]
-    fig_def_R = oa.plot_shots_defensive(get_img_path("def_R"), viz_config["def_R"], pcts_dR, tot_dR, ids_dR)
-
-    fig_att_headers = None
-    fig_def_headers = None
-
-    if os.path.exists(HEADERS_CSV) and os.path.exists(EVENTS_SEQ_CSV):
-        headers_df = load_headers(HEADERS_CSV)
-        seq_df = load_events_sequences(EVENTS_SEQ_CSV)
-        headers_df = oa.attach_actual_club_from_events(headers_df, seq_df)
-        team_c = oa._canon_team(selected_team) or selected_team
-        df_team = headers_df[headers_df["club_actual_canon"] == team_c].copy()
-        if not df_team.empty:
-            fig_att_headers = oa.plot_attacking_corner_players_headers(df_team, max_players=15)
-            fig_def_headers = oa.plot_defending_corner_players_diverging(df_team, max_players=15)
-
-    images_by_token = {
-        "{Corners_left_positions_vis}": [fig_to_png_bytes(fig_att_L)],
-        "{Corners_right_positions_vis}": [fig_to_png_bytes(fig_att_R)],
-        "{Corners_left_shots_vis}": [fig_to_png_bytes(fig_att_shots_L)],
-        "{Corners_right_shots_vis}": [fig_to_png_bytes(fig_att_shots_R)],
-        # Template has duplicated token on slide 2 for def-left shots;
-        # we provide 2 images for the same token so the filler can place both shapes.
-        "{def_Corners_left_shots_vis}": [fig_to_png_bytes(fig_def_L), fig_to_png_bytes(fig_def_R)],
-        "{att_corners_headers}": [fig_to_png_bytes(fig_att_headers)] if fig_att_headers is not None else [],
-        "{def_corners_headers}": [fig_to_png_bytes(fig_def_headers)] if fig_def_headers is not None else [],
-    }
-
-    meta = {
-        "{TEAM_NAME}": selected_team,
-        "{nlc}": str(results.get("own_left_count", 0)),
-        "{nrc}": str(results.get("own_right_count", 0)),
-    }
-
-    payload = fill_corner_template_pptx(
-        template_pptx_path=TEMPLATE_PPTX,
-        team_name=selected_team,
-        team_primary_hex=theme.top_hex,
-        team_secondary_hex=theme.rest_hex,
-        logo_path=theme.logo_relpath if theme.logo_relpath and os.path.exists(theme.logo_relpath) else None,
-        meta_replacements=meta,
-        images_by_token=images_by_token,
-        left_takers_df=results["tables"]["left"],
-        right_takers_df=results["tables"]["right"],
-    )
-    return payload.pptx_bytes, payload.filename
-
-
-# ---------------- UI ----------------
-_center_container_css()
+# ---------------- Sidebar ----------------
+st.sidebar.header("Configuration")
 
 if not os.path.exists(CORNER_EVENTS_CSV):
     st.error(f"❌ Data file not found at: `{CORNER_EVENTS_CSV}`")
     st.stop()
 
+# Load FULL dataset once (unfiltered)
 json_data_full = load_corner_jsonlike(CORNER_EVENTS_CSV)
+
 all_teams = get_team_list(json_data_full)
 if not all_teams:
     st.error("❌ No teams found in dataset.")
     st.stop()
 
-themes = build_team_themes()
+selected_team = st.sidebar.selectbox("Select team", all_teams)
 
-# Center controls (same order as old sidebar)
-with st.container():
-    st.subheader("Configuration")
-    selected_team = st.selectbox("Select team", all_teams)
-
+# Build team-only matches sorted most recent -> oldest
 matches_full = json_data_full.get("matches", []) or []
 team_matches_sorted = sorted(
     [m for m in matches_full if _match_has_team(m, selected_team)],
     key=_match_dt,
     reverse=True,
 )
+
 team_total = len(team_matches_sorted)
 if team_total == 0:
     st.warning("No matches found for this team in the dataset.")
     st.stop()
 
-n_last = st.slider(
+n_last = st.sidebar.slider(
     "Analyze last X matches (selected team only)",
     min_value=1,
     max_value=team_total,
-    value=team_total,
+    value=team_total,  # default = all matches for selected team
     step=1,
 )
 window_label = "All" if n_last >= team_total else f"Last {n_last}"
 
-show_matches_used = st.checkbox("Show matches used", value=False)
+
+# Dataset used for analysis (this makes slider ACTUALLY work)
+team_matches_window = team_matches_sorted[:n_last]
+json_data_view = {"matches": team_matches_window}
+
+# Checkbox: show matches used (match_name only), sorted most recent first
+st.sidebar.markdown("---")
+show_matches_used = st.sidebar.checkbox("Show matches used", value=False)
 if show_matches_used:
-    team_matches_window = team_matches_sorted[:n_last]
     df_used = pd.DataFrame([{"match_name": m.get("match_name", "")} for m in team_matches_window])
-    st.write(f"Matches used: {len(df_used)}")
-    st.dataframe(df_used[["match_name"]], use_container_width=True, hide_index=True)
+    st.sidebar.write(f"Matches used: {len(df_used)}")
+    st.sidebar.dataframe(df_used[["match_name"]], use_container_width=True, hide_index=True)
 
-st.divider()
 
-st.subheader("Add data")
+
+# --- ADD DATA ---
+st.sidebar.markdown("---")
+st.sidebar.subheader("Add data")
+
 if "uploader_key" not in st.session_state:
     st.session_state.uploader_key = 0
 
-uploaded_files = st.file_uploader(
+uploaded_files = st.sidebar.file_uploader(
     "Upload SciSports files (JSON or ZIP)",
     type=["json", "zip"],
     accept_multiple_files=True,
     key=f"uploader_{st.session_state.uploader_key}",
 )
 
-run_update = st.button(
+run_update = st.sidebar.button(
     "Update database",
     type="primary",
     disabled=not uploaded_files,
@@ -455,7 +355,7 @@ if run_update:
     n_json = _save_uploads_to_batch(uploaded_files, batch_dir)
 
     if n_json == 0:
-        st.error("❌ No JSON files found in upload/zip.")
+        st.sidebar.error("❌ No JSON files found in upload/zip.")
     else:
         with st.spinner("Updating database CSVs..."):
             result = upd.update_database(
@@ -464,7 +364,7 @@ if run_update:
             )
 
         if result.get("ok"):
-            st.success(
+            st.sidebar.success(
                 "✅ Database updated. "
                 f"events_all Δ{result.get('added_events_all', 0)}, "
                 f"events_full Δ{result.get('added_events_full', 0)}, "
@@ -472,75 +372,164 @@ if run_update:
                 f"GitHub: {result.get('github_push_msg', '')}"
             )
 
+            # Clean up batch folder
             try:
                 shutil.rmtree(batch_dir, ignore_errors=True)
             except Exception:
                 pass
 
+            # Reset uploader so files disappear visually
             st.session_state.uploader_key += 1
+
+            # Invalidate analysis cache (dataset changed)
             st.session_state.dataset_version += 1
             st.session_state.analysis_cache = {}
+
+            # Clear streamlit cache so CSV reloads
             st.cache_data.clear()
             st.rerun()
         else:
-            st.error(f"❌ Update failed: {result.get('error', 'Unknown error')}")
-            st.write(result)
+            st.sidebar.error(f"❌ Update failed: {result.get('error', 'Unknown error')}")
+            st.sidebar.write(result)
 
+# Latest match caption should reflect FULL dataset (not filtered)
 latest_dt, latest_name = oa.get_latest_match_info(json_data_full)
-st.caption(
+st.sidebar.markdown("---")
+st.sidebar.caption(
     f"Latest match in dataset: {latest_dt.strftime('%d-%m-%Y')} — {latest_name}"
     if latest_dt and latest_name
     else "Latest match in dataset: -"
 )
 
-# Header banner (preview)
-theme = themes.get(selected_team) or TeamTheme("#111827", "#FFFFFF", f"logos/{slugify(selected_team)}.png")
-_render_header(
-    team=selected_team,
-    primary_hex=theme.top_hex,
-    secondary_hex=theme.rest_hex,
-    logo_path=theme.logo_relpath,
-    window_label=window_label,
-    matches_analyzed=None,
-)
+# ---------------- Main analysis ----------------
+if json_data_view and selected_team:
+    cache_key = (st.session_state.dataset_version, selected_team, n_last)
 
-# Bottom fixed button (only button that generates analysis)
-st.markdown(
-    """
-    <div class="fixed-bottom">
-      <div class="fixed-bottom-inner">
-    """,
-    unsafe_allow_html=True,
-)
+    if cache_key not in st.session_state.analysis_cache:
+        with st.spinner(f"Analyzing {selected_team}..."):
+            # IMPORTANT: analyze the filtered view so slider works
+            results = get_analysis_results(json_data_view, selected_team)
 
-generate = st.button("Generate corner analysis", type="primary", use_container_width=True)
+            # Keep league stats stable (full dataset)
+            league_stats = get_league_stats(json_data_full)
 
-st.markdown(
-    """
-      </div>
-    </div>
-    """,
-    unsafe_allow_html=True,
-)
+            viz_config = oa.get_visualization_coords()
 
-if generate:
-    if not os.path.exists(TEMPLATE_PPTX):
-        st.error(f"❌ Template PPTX not found at `{TEMPLATE_PPTX}`. Put it in the repo root.")
-        st.stop()
+        st.session_state.analysis_cache[cache_key] = {
+            "results": results,
+            "league_stats": league_stats,
+            "viz_config": viz_config,
+        }
+    else:
+        cached = st.session_state.analysis_cache[cache_key]
+        results = cached["results"]
+        league_stats = cached["league_stats"]
+        viz_config = cached["viz_config"]
 
-    with st.spinner("Generating filled PowerPoint..."):
-        pptx_bytes, fname = _generate_filled_pptx(
-            json_data_full=json_data_full,
-            selected_team=selected_team,
-            n_last=n_last,
-            themes=themes,
+    themes = build_team_themes()
+    _ = apply_header(selected_team, results.get("used_matches"), themes, window_label=window_label)
+
+    col1, col2 = st.columns(2)
+    with col1:
+        st.subheader(f"Att. Corners Left ({results['own_left_count']} corners)")
+        fig = oa.plot_percent_attacking(
+            get_img_path("att_L"),
+            viz_config["att_L"],
+            viz_config["att_centers_L"],
+            results["attacking"]["left_pct"],
         )
+        st.pyplot(style_fig_bg(fig, APP_BG))
+    with col2:
+        st.subheader(f"Att. Corners Right ({results['own_right_count']} corners)")
+        fig = oa.plot_percent_attacking(
+            get_img_path("att_R"),
+            viz_config["att_R"],
+            viz_config["att_centers_R"],
+            results["attacking"]["right_pct"],
+        )
+        st.pyplot(style_fig_bg(fig, APP_BG))
 
-    st.success("✅ PowerPoint generated.")
-    st.download_button(
-        "Download filled template (.pptx)",
-        data=pptx_bytes,
-        file_name=fname,
-        mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
-        use_container_width=True,
-    )
+    col1, col2 = st.columns(2)
+    with col1:
+        st.subheader("How many attacking corners led to a shot? (Left Side)")
+        tot_z, shot_z, pct_z = results["attacking_shots"]["left"]
+        pctiles = oa.build_percentiles_for_team(league_stats, selected_team, "left", min_zone_corners=4)
+        fig = oa.plot_shots_attacking_with_percentile(
+            get_img_path("def_L"),
+            viz_config["def_L"],
+            pct_z,
+            tot_z,
+            shot_z,
+            pctiles,
+            min_zone_corners=4,
+            font_size=16,
+        )
+        st.pyplot(style_fig_bg(fig, APP_BG))
+    with col2:
+        st.subheader("How many attacking corners led to a shot? (Right Side)")
+        tot_z, shot_z, pct_z = results["attacking_shots"]["right"]
+        pctiles = oa.build_percentiles_for_team(league_stats, selected_team, "right", min_zone_corners=4)
+        fig = oa.plot_shots_attacking_with_percentile(
+            get_img_path("def_R"),
+            viz_config["def_R"],
+            pct_z,
+            tot_z,
+            shot_z,
+            pctiles,
+            min_zone_corners=4,
+            font_size=16,
+        )
+        st.pyplot(style_fig_bg(fig, APP_BG))
+
+    st.divider()
+    st.markdown("##### 📋 Corner Takers (Left)")
+    st.dataframe(results["tables"]["left"], width="stretch", hide_index=True)
+
+    st.divider()
+    st.markdown("##### 📋 Corner Takers (Right)")
+    st.dataframe(results["tables"]["right"], width="stretch", hide_index=True)
+
+    st.divider()
+    col1, col2 = st.columns(2)
+    with col1:
+        st.subheader("Def. Corners Left: how many crosses turned into a shot?")
+        tot, ids, pcts = results["defensive"]["left"]
+        fig = oa.plot_shots_defensive(get_img_path("def_L"), viz_config["def_L"], pcts, tot, ids)
+        st.pyplot(style_fig_bg(fig, APP_BG))
+    with col2:
+        st.subheader("Def. Corners Right: how many crosses turned into a shot?")
+        tot, ids, pcts = results["defensive"]["right"]
+        fig = oa.plot_shots_defensive(get_img_path("def_R"), viz_config["def_R"], pcts, tot, ids)
+        st.pyplot(style_fig_bg(fig, APP_BG))
+
+    st.divider()
+    st.markdown("### Attacking & Defending corner headers: Who is dangerous, and who is weak?")
+
+    if not os.path.exists(HEADERS_CSV):
+        st.warning(f"Player charts skipped because `{HEADERS_CSV}` is missing.")
+    elif not os.path.exists(EVENTS_SEQ_CSV):
+        st.warning(f"Player charts skipped because `{EVENTS_SEQ_CSV}` is missing (needed to map HOME/AWAY to teams).")
+    else:
+        with st.spinner("Loading headers + mapping HOME/AWAY to actual teams..."):
+            headers_df = load_headers(HEADERS_CSV)
+            seq_df = load_events_sequences(EVENTS_SEQ_CSV)
+
+            headers_df = oa.attach_actual_club_from_events(headers_df, seq_df)
+
+            team_c = oa._canon_team(selected_team) or selected_team
+            df_team = headers_df[headers_df["club_actual_canon"] == team_c].copy()
+
+        if df_team.empty:
+            st.warning("No player header rows found for this team (after HOME/AWAY mapping).")
+        else:
+            col1, col2 = st.columns(2)
+            with col1:
+                st.markdown("##### 🟦 Attacking corner players (chart)")
+                fig_att = oa.plot_attacking_corner_players_headers(df_team, max_players=15)
+                st.pyplot(style_fig_bg(fig_att, APP_BG), clear_figure=True)
+
+            with col2:
+                st.markdown("##### 🟥 Defending corner players (chart)")
+                fig_def = oa.plot_defending_corner_players_diverging(df_team, max_players=15)
+                st.pyplot(style_fig_bg(fig_def, APP_BG), clear_figure=True)
+                

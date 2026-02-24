@@ -28,17 +28,30 @@ def fig_to_png_bytes(fig: matplotlib.figure.Figure, *, dpi: int = 220) -> bytes:
     return bio.getvalue()
 
 
-# ---------------- Shape traversal (supports GROUP) ----------------
-def iter_all_shapes(container) -> Iterable:
+# ---------------- GROUP-safe traversal w/ absolute coords ----------------
+ShapeWithAbs = Tuple[object, int, int]
+
+
+def iter_shapes_abs(container, *, off_x: int = 0, off_y: int = 0) -> Iterable[ShapeWithAbs]:
     """
-    Recursively yields shapes from:
+    Yields (shape, abs_left, abs_top) for:
       - slide
-      - group shape (group.shapes)
+      - group shapes (recursively)
+    Coordinates are absolute in slide space.
     """
     for shp in container.shapes:
-        yield shp
+        try:
+            left = int(shp.left) + off_x
+            top = int(shp.top) + off_y
+        except Exception:
+            left = off_x
+            top = off_y
+
+        yield shp, left, top
+
         if shp.shape_type == MSO_SHAPE_TYPE.GROUP:
-            yield from iter_all_shapes(shp)
+            # Children positions are relative to group.
+            yield from iter_shapes_abs(shp, off_x=left, off_y=top)
 
 
 def _shape_text(shp) -> str:
@@ -53,9 +66,9 @@ def _shape_text(shp) -> str:
 def _replace_text_in_shape(shp, replacements: Dict[str, str]) -> None:
     if not getattr(shp, "has_text_frame", False):
         return
-    tf = shp.text_frame
 
-    # Replace on run-level (best effort)
+    tf = shp.text_frame
+    # Run-level
     for para in tf.paragraphs:
         for run in para.runs:
             txt = run.text
@@ -66,15 +79,13 @@ def _replace_text_in_shape(shp, replacements: Dict[str, str]) -> None:
                     txt = txt.replace(k, v)
             run.text = txt
 
-    # Some PPTX split tokens across runs; do a second pass by rewriting whole paragraph text
-    # while preserving basic formatting (pptx limitation).
+    # Paragraph-level (handles token split across runs)
     for para in tf.paragraphs:
         whole = "".join(run.text for run in para.runs)
         replaced = whole
         for k, v in replacements.items():
             replaced = replaced.replace(k, v)
         if replaced != whole:
-            # clear runs and set a single run
             for run in list(para.runs):
                 run.text = ""
             if para.runs:
@@ -102,16 +113,15 @@ def _delete_shape(shp) -> None:
         pass
 
 
-def _find_shapes_with_token(container, token: str) -> List:
-    hits = []
-    for shp in iter_all_shapes(container):
+def _find_shapes_with_token(slide, token: str) -> List[ShapeWithAbs]:
+    hits: List[ShapeWithAbs] = []
+    for shp, ax, ay in iter_shapes_abs(slide):
         if token in _shape_text(shp):
-            hits.append(shp)
+            hits.append((shp, ax, ay))
     return hits
 
 
 def _set_slide_background(slide, *, bg_hex: str) -> None:
-    # 1) set actual slide background
     fill = slide.background.fill
     fill.solid()
     fill.fore_color.rgb = _hex_to_rgb(bg_hex)
@@ -126,19 +136,13 @@ def _set_shape_fill(shp, *, hex_color: str) -> None:
         pass
 
 
-def _is_full_slide_bg(shp, slide_w: int, slide_h: int) -> bool:
-    """
-    Detect a big rectangle/polygon that covers (almost) the whole slide.
-    Often templates use a rectangle instead of the slide background.
-    """
+def _is_full_slide_bg(abs_left: int, abs_top: int, shp, slide_w: int, slide_h: int) -> bool:
     try:
         w = int(shp.width)
         h = int(shp.height)
-        x = int(shp.left)
-        y = int(shp.top)
         return (
-            x <= int(slide_w * 0.05)
-            and y <= int(slide_h * 0.05)
+            abs_left <= int(slide_w * 0.05)
+            and abs_top <= int(slide_h * 0.05)
             and w >= int(slide_w * 0.90)
             and h >= int(slide_h * 0.90)
         )
@@ -146,9 +150,9 @@ def _is_full_slide_bg(shp, slide_w: int, slide_h: int) -> bool:
         return False
 
 
-def _is_bar_candidate(shp, slide_w: int, slide_h: int) -> bool:
+def _is_bar_candidate(abs_left: int, abs_top: int, shp, slide_w: int, slide_h: int) -> bool:
     """
-    Heuristic: wide rectangle spanning most of slide width, near top or bottom.
+    Bar heuristic using ABS coords.
     """
     try:
         if shp.shape_type not in (MSO_SHAPE_TYPE.AUTO_SHAPE, MSO_SHAPE_TYPE.FREEFORM):
@@ -156,59 +160,62 @@ def _is_bar_candidate(shp, slide_w: int, slide_h: int) -> bool:
 
         w = int(shp.width)
         h = int(shp.height)
-        x = int(shp.left)
-        y = int(shp.top)
 
-        if w < int(slide_w * 0.85):
+        if w < int(slide_w * 0.80):
             return False
-        if h > int(slide_h * 0.15):
+        if h > int(slide_h * 0.18):
             return False
 
-        near_top = y <= int(slide_h * 0.10)
-        near_bottom = (y + h) >= int(slide_h * 0.90)
+        near_top = abs_top <= int(slide_h * 0.12)
+        near_bottom = (abs_top + h) >= int(slide_h * 0.88)
 
-        return (near_top or near_bottom) and x <= int(slide_w * 0.10)
+        return (near_top or near_bottom) and abs_left <= int(slide_w * 0.12)
     except Exception:
         return False
 
 
 def _color_background_rectangles(slide, *, bg_hex: str, slide_w: int, slide_h: int) -> None:
-    # If template uses a full-slide rectangle, recolor it.
-    for shp in iter_all_shapes(slide):
-        if _is_full_slide_bg(shp, slide_w, slide_h):
+    for shp, ax, ay in iter_shapes_abs(slide):
+        if _is_full_slide_bg(ax, ay, shp, slide_w, slide_h):
             _set_shape_fill(shp, hex_color=bg_hex)
 
 
 def _color_top_and_bottom_bars(slide, *, bar_hex: str, slide_w: int, slide_h: int) -> None:
-    # Color any bar-like shapes (even inside groups)
-    for shp in iter_all_shapes(slide):
-        if _is_bar_candidate(shp, slide_w, slide_h):
+    # Color any bar-like shapes (top or bottom) with ABS coords
+    for shp, ax, ay in iter_shapes_abs(slide):
+        if _is_bar_candidate(ax, ay, shp, slide_w, slide_h):
             _set_shape_fill(shp, hex_color=bar_hex)
 
-    # Also color the specific bottom-bar placeholder shape if present (keep its text)
-    for shp in _find_shapes_with_token(slide, "{bottom_bar}"):
+    # Also color bottom-bar placeholder if present (keep its text)
+    for shp, _, _ in _find_shapes_with_token(slide, "{bottom_bar}"):
         _set_shape_fill(shp, hex_color=bar_hex)
 
 
-def _insert_image_over_shape(slide, shp, img_bytes: bytes) -> None:
+def _insert_image_over_shape(slide, shp, *, abs_left: int, abs_top: int, img_bytes: bytes) -> None:
     """
-    Replaces the placeholder shape by deleting it and adding a picture at same coords.
-    We add the picture to the SLIDE (not inside group), which is fine for layout.
+    For GROUP children: abs_left/abs_top fixes placement.
     """
-    left, top, width, height = shp.left, shp.top, shp.width, shp.height
+    width, height = shp.width, shp.height
     _delete_shape(shp)
-    slide.shapes.add_picture(io.BytesIO(img_bytes), left, top, width=width, height=height)
+    slide.shapes.add_picture(
+        io.BytesIO(img_bytes),
+        abs_left,
+        abs_top,
+        width=width,
+        height=height,
+    )
 
 
 def _fill_token_with_image(slide, token: str, images: List[bytes]) -> None:
-    shapes = _find_shapes_with_token(slide, token)
-    if not shapes or not images:
+    hits = _find_shapes_with_token(slide, token)
+    if not hits or not images:
         return
 
-    # stable ordering to match left->right placement if multiple placeholders share token
-    shapes_sorted = sorted(shapes, key=lambda s: (int(s.left), int(s.top)))
-    for shp, img in zip(shapes_sorted, images):
-        _insert_image_over_shape(slide, shp, img)
+    # Stable ordering: left->right, top->bottom in ABS space
+    hits_sorted = sorted(hits, key=lambda t: (t[1], t[2]))
+
+    for (shp, ax, ay), img in zip(hits_sorted, images):
+        _insert_image_over_shape(slide, shp, abs_left=ax, abs_top=ay, img_bytes=img)
 
 
 def _find_tables(slide) -> List:
@@ -222,7 +229,6 @@ def _write_df_to_ppt_table(table, df: pd.DataFrame) -> None:
     n_rows = len(table.rows)
     n_cols = len(table.columns)
 
-    # Clear body
     for r in range(1, n_rows):
         for c in range(n_cols):
             table.cell(r, c).text = ""
@@ -241,11 +247,11 @@ def _write_df_to_ppt_table(table, df: pd.DataFrame) -> None:
 
 def _set_header_text_white(slide, *, slide_h: int) -> None:
     """
-    Make any text near top of slide white (title/subtitle).
+    Make any text shape in top ~16% of slide white (ABS coords).
     """
-    threshold = int(slide_h * 0.14)
-    for shp in iter_all_shapes(slide):
-        if getattr(shp, "has_text_frame", False) and int(shp.top) <= threshold:
+    threshold = int(slide_h * 0.16)
+    for shp, _, abs_top in iter_shapes_abs(slide):
+        if getattr(shp, "has_text_frame", False) and abs_top <= threshold:
             _set_text_white(shp)
 
 
@@ -267,15 +273,6 @@ def fill_corner_template_pptx(
     left_takers_df: pd.DataFrame,
     right_takers_df: pd.DataFrame,
 ) -> FilledPptPayload:
-    """
-    - Slide background: secondary color (also recolors full-slide bg rectangles if present)
-    - Top+bottom bars: primary color (even if in groups)
-    - Header text near top: white
-    - {LOGO}: replaced by image (even if in groups)
-    - plot tokens: replaced by images (even if in groups)
-    - Slide1 first table: left takers; Slide2 first table: right takers
-    - {bottom_bar} text is not replaced; its shape is only recolored
-    """
     if not os.path.exists(template_pptx_path):
         raise FileNotFoundError(f"Template not found: {template_pptx_path}")
 
@@ -292,25 +289,26 @@ def fill_corner_template_pptx(
         _color_background_rectangles(slide, bg_hex=team_secondary_hex, slide_w=slide_w, slide_h=slide_h)
         _color_top_and_bottom_bars(slide, bar_hex=team_primary_hex, slide_w=slide_w, slide_h=slide_h)
 
-        for shp in iter_all_shapes(slide):
+        # Replace tokens inside GROUPs too
+        for shp, _, _ in iter_shapes_abs(slide):
             _replace_text_in_shape(shp, base_repl)
 
         _set_header_text_white(slide, slide_h=slide_h)
 
-        # Logo
+        # Logo (GROUP-safe + ABS placement)
         if logo_path and os.path.exists(logo_path):
             with open(logo_path, "rb") as f:
                 logo_bytes = f.read()
-            for shp in _find_shapes_with_token(slide, "{LOGO}"):
-                _insert_image_over_shape(slide, shp, logo_bytes)
+            for shp, ax, ay in _find_shapes_with_token(slide, "{LOGO}"):
+                _insert_image_over_shape(slide, shp, abs_left=ax, abs_top=ay, img_bytes=logo_bytes)
 
-        # Images
+        # Figures (GROUP-safe + ABS placement)
         for token, imgs in images_by_token.items():
             if token == "{bottom_bar}":
                 continue
             _fill_token_with_image(slide, token, imgs)
 
-    # Tables (top-level tables only)
+    # Tables (top-level)
     if len(prs.slides) >= 1:
         t1 = _find_tables(prs.slides[0])
         if t1:

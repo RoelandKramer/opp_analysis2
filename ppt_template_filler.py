@@ -23,10 +23,28 @@ def _hex_to_rgb(hex_color: str) -> RGBColor:
 
 
 def fig_to_png_bytes(fig: matplotlib.figure.Figure, *, dpi: int = 220) -> bytes:
-    bio = io.BytesIO()
-    fig.savefig(bio, format="png", dpi=dpi, bbox_inches="tight", transparent=True)
-    return bio.getvalue()
+    """
+    Export full-canvas PNG so it fills PPT placeholder exactly.
+    DO NOT use bbox_inches='tight' (it shrinks to content).
+    """
+    # Ensure axes use full figure area
+    try:
+        fig.subplots_adjust(left=0, right=1, top=1, bottom=0, wspace=0, hspace=0)
+        for ax in fig.axes:
+            ax.set_position([0, 0, 1, 1])
+    except Exception:
+        pass
 
+    bio = io.BytesIO()
+    fig.savefig(
+        bio,
+        format="png",
+        dpi=dpi,
+        transparent=True,
+        pad_inches=0,
+        bbox_inches=None,   # critical
+    )
+    return bio.getvalue()
 
 # ---------------- GROUP-safe traversal w/ absolute coords ----------------
 ShapeWithAbs = Tuple[object, int, int]

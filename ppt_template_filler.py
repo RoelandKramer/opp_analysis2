@@ -13,7 +13,8 @@ import pandas as pd
 from pptx import Presentation
 from pptx.dml.color import RGBColor
 from pptx.enum.shapes import MSO_SHAPE_TYPE
-
+from PIL import Image
+from pptx.util import Emu
 
 def _hex_to_rgb(hex_color: str) -> RGBColor:
     s = (hex_color or "").strip().lstrip("#")
@@ -22,12 +23,10 @@ def _hex_to_rgb(hex_color: str) -> RGBColor:
     return RGBColor(int(s[0:2], 16), int(s[2:4], 16), int(s[4:6], 16))
 
 
-def fig_to_png_bytes(fig: matplotlib.figure.Figure, *, dpi: int = 220) -> bytes:
+def fig_to_png_bytes(fig: matplotlib.figure.Figure, *, dpi: int = 240) -> bytes:
     """
-    Export full-canvas PNG so it fills PPT placeholder exactly.
-    DO NOT use bbox_inches='tight' (it shrinks to content).
+    Full-canvas export (no 'tight' bounding) so the PNG fills the PPT box.
     """
-    # Ensure axes use full figure area
     try:
         fig.subplots_adjust(left=0, right=1, top=1, bottom=0, wspace=0, hspace=0)
         for ax in fig.axes:
@@ -41,15 +40,44 @@ def fig_to_png_bytes(fig: matplotlib.figure.Figure, *, dpi: int = 220) -> bytes:
         format="png",
         dpi=dpi,
         transparent=True,
+        bbox_inches=None,   # critical: don't trim
         pad_inches=0,
-        bbox_inches=None,   # critical
     )
     return bio.getvalue()
 
 # ---------------- GROUP-safe traversal w/ absolute coords ----------------
 ShapeWithAbs = Tuple[object, int, int]
 
+def _picture_cover_crop(pic, *, img_w_px: int, img_h_px: int, box_w_emu: int, box_h_emu: int) -> None:
+    """
+    Crop picture to fill the placeholder box completely while preserving aspect ratio.
+    """
+    if img_w_px <= 0 or img_h_px <= 0 or box_w_emu <= 0 or box_h_emu <= 0:
+        return
 
+    img_ar = img_w_px / img_h_px
+    box_ar = box_w_emu / box_h_emu
+
+    # python-pptx crop values are fractions [0..1] of the image dimension
+    pic.crop_left = 0.0
+    pic.crop_right = 0.0
+    pic.crop_top = 0.0
+    pic.crop_bottom = 0.0
+
+    if img_ar > box_ar:
+        # Image is wider than box -> crop left/right
+        new_w = img_h_px * box_ar
+        excess = img_w_px - new_w
+        frac = (excess / img_w_px) / 2.0
+        pic.crop_left = frac
+        pic.crop_right = frac
+    else:
+        # Image is taller than box -> crop top/bottom
+        new_h = img_w_px / box_ar
+        excess = img_h_px - new_h
+        frac = (excess / img_h_px) / 2.0
+        pic.crop_top = frac
+        pic.crop_bottom = frac
 def iter_shapes_abs(container, *, off_x: int = 0, off_y: int = 0) -> Iterable[ShapeWithAbs]:
     """
     Yields (shape, abs_left, abs_top) for:
@@ -236,18 +264,33 @@ def _color_top_and_bottom_bars(slide, *, bar_hex: str, slide_w: int, slide_h: in
 
 def _insert_image_over_shape(slide, shp, *, abs_left: int, abs_top: int, img_bytes: bytes) -> None:
     """
-    For GROUP children: abs_left/abs_top fixes placement.
+    Insert image to EXACTLY fill the placeholder bounds (cover fit + crop).
+    Works for grouped placeholders because abs_left/abs_top are slide-absolute.
     """
-    width, height = shp.width, shp.height
+    box_w = int(shp.width)
+    box_h = int(shp.height)
+
+    # read pixel size for cropping math
+    im = Image.open(io.BytesIO(img_bytes))
+    img_w_px, img_h_px = im.size
+
     _delete_shape(shp)
-    slide.shapes.add_picture(
+
+    pic = slide.shapes.add_picture(
         io.BytesIO(img_bytes),
-        abs_left,
-        abs_top,
-        width=width,
-        height=height,
+        Emu(abs_left),
+        Emu(abs_top),
+        width=Emu(box_w),
+        height=Emu(box_h),
     )
 
+    _picture_cover_crop(
+        pic,
+        img_w_px=img_w_px,
+        img_h_px=img_h_px,
+        box_w_emu=box_w,
+        box_h_emu=box_h,
+    )
 
 def _fill_token_with_image(slide, token: str, images: List[bytes]) -> None:
     hits = _find_shapes_with_token(slide, token)

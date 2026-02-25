@@ -354,8 +354,8 @@ def _generate_filled_pptx(
         # Template has duplicated token on slide 2 for def-left shots;
         # we provide 2 images for the same token so the filler can place both shapes.
         "{def_Corners_left_shots_vis}": [fig_to_png_bytes(fig_def_L), fig_to_png_bytes(fig_def_R)],
-        "{att_corners_headers}": [fig_to_png_bytes(fig_att_headers)] if fig_att_headers is not None else [],
-        "{def_corners_headers}": [fig_to_png_bytes(fig_def_headers)] if fig_def_headers is not None else [],
+        "{att_corners_headers}": [fig_to_png_bytes_labels(fig_att_headers)] if fig_att_headers is not None else [],
+        "{def_corners_headers}": [fig_to_png_bytes_labels(fig_def_headers)] if fig_def_headers is not None else [],
     }
 
     meta = {

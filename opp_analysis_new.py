@@ -951,9 +951,10 @@ def plot_shots_defensive(
     shot_seqids_by_zone: Dict[str, set],
 ):
     fig, ax = plt.subplots(figsize=(14, 10))
-    ax.imshow(_load_bg(img_file))
-    ax.axis("off")
-
+    bg = _load_bg(img_file)
+    ax.imshow(bg, aspect="auto")
+    ax.set_aspect("auto")
+    ax.set_anchor("C")
     vals = list(shot_pct.values())
     norm = plt.Normalize(min(vals) if vals else 0, max(vals) if vals else 1)
     cmap = cm.get_cmap("Reds")
@@ -984,9 +985,10 @@ def plot_percent_attacking(
     pct_by_zone: Dict[str, float],
 ):
     fig, ax = plt.subplots(figsize=(14, 10))
-    ax.imshow(_load_bg(img_file))
-    ax.axis("off")
-
+    bg = _load_bg(img_file)
+    ax.imshow(bg, aspect="auto")
+    ax.set_aspect("auto")
+    ax.set_anchor("C")
     vals = list(pct_by_zone.values())
     norm = plt.Normalize(min(vals) if vals else 0, max(vals) if vals else 1)
     cmap = cm.get_cmap("Reds")
@@ -1023,8 +1025,10 @@ def plot_shots_attacking_with_percentile(
     font_size: int = 18,
 ):
     fig, ax = plt.subplots(figsize=(14, 10))
-    ax.imshow(_load_bg(img_file))
-    ax.axis("off")
+    bg = _load_bg(img_file)
+    ax.imshow(bg, aspect="auto")
+    ax.set_aspect("auto")
+    ax.set_anchor("C")
 
     eligible_vals = [
         float(shot_pct_by_zone[z])

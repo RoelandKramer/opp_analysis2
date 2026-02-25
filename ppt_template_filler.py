@@ -14,6 +14,7 @@ from PIL import Image
 from pptx import Presentation
 from pptx.dml.color import RGBColor
 from pptx.enum.shapes import MSO_SHAPE_TYPE
+from pptx.util import Pt
 
 
 # ============================================================
@@ -71,14 +72,14 @@ def fig_to_png_bytes_labels(fig: matplotlib.figure.Figure, *, dpi: int = 240) ->
 
 
 # ============================================================
-# Cropping (user-controlled)
+# Cropping
 # ============================================================
 
 @dataclass(frozen=True)
 class CropSpec:
     """
     Fractions in [0..0.45] typically.
-    Example: top=0.20 trims 20% from the top.
+    Example: top=0.15 trims 15% from the top.
     """
     left: float = 0.0
     right: float = 0.0
@@ -382,26 +383,38 @@ def _find_tables(slide) -> List:
 
 
 def _write_df_to_ppt_table(table, df: pd.DataFrame) -> None:
+    """
+    Writes DF into an existing PPT table and forces ALL cell text to 12pt.
+    """
     if df is None:
         df = pd.DataFrame()
 
     n_rows = len(table.rows)
     n_cols = len(table.columns)
 
+    # Clear body
     for r in range(1, n_rows):
         for c in range(n_cols):
             table.cell(r, c).text = ""
 
-    if df.empty:
-        return
+    # Fill body
+    if not df.empty:
+        values = df.astype(str).replace({"nan": "-", "None": "-"}).values.tolist()
+        max_write = max(0, n_rows - 1)
+        for r in range(min(max_write, len(values))):
+            row_vals = values[r]
+            for c in range(min(n_cols, len(row_vals))):
+                table.cell(r + 1, c).text = row_vals[c]
 
-    values = df.astype(str).replace({"nan": "-", "None": "-"}).values.tolist()
-    max_write = max(0, n_rows - 1)
-
-    for r in range(min(max_write, len(values))):
-        row_vals = values[r]
-        for c in range(min(n_cols, len(row_vals))):
-            table.cell(r + 1, c).text = row_vals[c]
+    # Force 12pt everywhere (headers + body)
+    for r in range(n_rows):
+        for c in range(n_cols):
+            cell = table.cell(r, c)
+            if not cell.text_frame:
+                continue
+            for para in cell.text_frame.paragraphs:
+                for run in para.runs:
+                    run.font.size = Pt(12)
 
 
 # ============================================================
@@ -428,9 +441,11 @@ def fill_corner_template_pptx(
     right_takers_df: pd.DataFrame,
 ) -> FilledPptPayload:
     """
-    Adds ONE cropping behavior:
-      - For placeholder named "PH_Corners_left_positions_vis", crop top 20% BEFORE placing.
-      - Nothing else is cropped.
+    Fixes your crop not applying by preventing token-based overwrites
+    for placeholders you already fill by SHAPE NAME.
+
+    Crops TOP 15% only for:
+      - PH_Corners_left_positions_vis
     """
     if not os.path.exists(template_pptx_path):
         raise FileNotFoundError(f"Template not found: {template_pptx_path}")
@@ -441,6 +456,14 @@ def fill_corner_template_pptx(
 
     base_repl = dict(meta_replacements or {})
     base_repl.setdefault("{TEAM_NAME}", team_name)
+
+    # If you fill by shape name, skip these tokens so they can't overwrite your cropped images.
+    token_to_named = {
+        "{Corners_left_positions_vis}": "PH_Corners_left_positions_vis",
+        "{Corners_right_positions_vis}": "PH_Corners_right_positions_vis",
+        "{Corners_left_shots_vis}": "PH_Corners_left_shots_vis",
+        "{Corners_right_shots_vis}": "PH_Corners_right_shots_vis",
+    }
 
     for slide_idx, slide in enumerate(prs.slides):
         _set_slide_background(slide, bg_hex=team_secondary_hex)
@@ -456,18 +479,31 @@ def fill_corner_template_pptx(
                 logo_bytes = f.read()
             _fill_token_with_images(slide, "{LOGO}", [logo_bytes], exact=True)
 
-        # 1) Named placeholders
+        # 1) Named placeholders (authoritative)
         named_for_slide = (images_by_shape_name or {}).get(slide_idx, {})
+        replaced_shape_names = set(named_for_slide.keys())
+
         for shape_name, img_bytes in named_for_slide.items():
-            # Crop TOP 15% for Att. Corners Left plot only
             if shape_name == "PH_Corners_left_positions_vis":
-                img_bytes = crop_png_bytes(img_bytes, crop=CropSpec(top=0.35))
-        
+                img_bytes = crop_png_bytes(img_bytes, crop=CropSpec(top=0.15))
             _replace_named_shape_with_picture(slide, shape_name, img_bytes)
-        # 2) Token placeholders (for anything you did NOT rename)
+
+        # 2) Token placeholders (ONLY for not-renamed items)
         for token, imgs in (images_by_token or {}).items():
             if token in ("{top_bar}", "{bottom_bar}"):
                 continue
+
+            mapped_name = token_to_named.get(token)
+            if mapped_name and mapped_name in replaced_shape_names:
+                continue
+
+            # Defensive plots are now placed by PH_def_left/PH_def_right in your app,
+            # so don't allow the old token to overwrite.
+            if token == "{def_Corners_left_shots_vis}" and (
+                "PH_def_left" in replaced_shape_names or "PH_def_right" in replaced_shape_names
+            ):
+                continue
+
             _fill_token_with_images(slide, token, imgs, exact=True)
 
         # Clear bar tokens

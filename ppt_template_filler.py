@@ -18,6 +18,18 @@ from pptx.util import Pt
 
 
 # ============================================================
+# Config
+# ============================================================
+
+# Your named placeholder for Att. Corners Left plot
+CROP_SHAPE_NAME = "PH_Corners_left_positions_vis"
+
+# Crop that plot after rendering: remove whitespace top+bottom.
+# (Based on your manual crop screenshot: the issue is BOTH top and bottom padding.)
+CROP_SPEC_ATT_LEFT = ("top_bottom", 0.15)  # 15% top AND 15% bottom
+
+
+# ============================================================
 # Basics
 # ============================================================
 
@@ -77,10 +89,6 @@ def fig_to_png_bytes_labels(fig: matplotlib.figure.Figure, *, dpi: int = 240) ->
 
 @dataclass(frozen=True)
 class CropSpec:
-    """
-    Fractions in [0..0.45] typically.
-    Example: top=0.15 trims 15% from the top.
-    """
     left: float = 0.0
     right: float = 0.0
     top: float = 0.0
@@ -113,6 +121,13 @@ def crop_png_bytes(img_bytes: bytes, *, crop: CropSpec) -> bytes:
     out = io.BytesIO()
     im.save(out, format="PNG")
     return out.getvalue()
+
+
+def _crop_att_left_plot(img_bytes: bytes) -> bytes:
+    mode, frac = CROP_SPEC_ATT_LEFT
+    if mode == "top_bottom":
+        return crop_png_bytes(img_bytes, crop=CropSpec(top=frac, bottom=frac))
+    return img_bytes
 
 
 # ============================================================
@@ -441,11 +456,9 @@ def fill_corner_template_pptx(
     right_takers_df: pd.DataFrame,
 ) -> FilledPptPayload:
     """
-    Fixes your crop not applying by preventing token-based overwrites
-    for placeholders you already fill by SHAPE NAME.
-
-    Crops TOP 15% only for:
-      - PH_Corners_left_positions_vis
+    FIXES:
+      - Crops Att. Corners Left plot (PH_Corners_left_positions_vis) BEFORE placing.
+      - Prevents token-based overwrites for plots that are filled via SHAPE NAME.
     """
     if not os.path.exists(template_pptx_path):
         raise FileNotFoundError(f"Template not found: {template_pptx_path}")
@@ -457,7 +470,7 @@ def fill_corner_template_pptx(
     base_repl = dict(meta_replacements or {})
     base_repl.setdefault("{TEAM_NAME}", team_name)
 
-    # If you fill by shape name, skip these tokens so they can't overwrite your cropped images.
+    # If you fill by shape name, skip these tokens so they can't overwrite images.
     token_to_named = {
         "{Corners_left_positions_vis}": "PH_Corners_left_positions_vis",
         "{Corners_right_positions_vis}": "PH_Corners_right_positions_vis",
@@ -484,9 +497,18 @@ def fill_corner_template_pptx(
         replaced_shape_names = set(named_for_slide.keys())
 
         for shape_name, img_bytes in named_for_slide.items():
-            if shape_name == "PH_Corners_left_positions_vis":
-                img_bytes = crop_png_bytes(img_bytes, crop=CropSpec(top=0.15))
-            _replace_named_shape_with_picture(slide, shape_name, img_bytes)
+            if shape_name == CROP_SHAPE_NAME:
+                img_bytes = _crop_att_left_plot(img_bytes)
+
+            ok = _replace_named_shape_with_picture(slide, shape_name, img_bytes)
+
+            # If the named placeholder wasn't found (template mismatch),
+            # we do NOTHING here and let token placeholders handle it below.
+            # (That token path is also crop-aware for the left plot.)
+
+            if not ok:
+                # Keep going; token insertion might still place it if token exists.
+                pass
 
         # 2) Token placeholders (ONLY for not-renamed items)
         for token, imgs in (images_by_token or {}).items():
@@ -497,7 +519,11 @@ def fill_corner_template_pptx(
             if mapped_name and mapped_name in replaced_shape_names:
                 continue
 
-            # Defensive plots are now placed by PH_def_left/PH_def_right in your app,
+            # If template still uses token for this plot, apply same crop here too.
+            if token == "{Corners_left_positions_vis}" and imgs:
+                imgs = [ _crop_att_left_plot(imgs[0]), *imgs[1:] ]
+
+            # Defensive plots now placed by PH_def_left/PH_def_right in your app,
             # so don't allow the old token to overwrite.
             if token == "{def_Corners_left_shots_vis}" and (
                 "PH_def_left" in replaced_shape_names or "PH_def_right" in replaced_shape_names

@@ -459,10 +459,11 @@ def fill_corner_template_pptx(
         # 1) Named placeholders
         named_for_slide = (images_by_shape_name or {}).get(slide_idx, {})
         for shape_name, img_bytes in named_for_slide.items():
+            # Crop TOP 15% for Att. Corners Left plot only
             if shape_name == "PH_Corners_left_positions_vis":
-                img_bytes = crop_png_bytes(img_bytes, crop=CropSpec(top=0.20))
+                img_bytes = crop_png_bytes(img_bytes, crop=CropSpec(top=0.35))
+        
             _replace_named_shape_with_picture(slide, shape_name, img_bytes)
-
         # 2) Token placeholders (for anything you did NOT rename)
         for token, imgs in (images_by_token or {}).items():
             if token in ("{top_bar}", "{bottom_bar}"):

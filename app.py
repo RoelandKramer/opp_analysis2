@@ -346,14 +346,20 @@ def _generate_filled_pptx(
             fig_att_headers = oa.plot_attacking_corner_players_headers(df_team, max_players=15)
             fig_def_headers = oa.plot_defending_corner_players_diverging(df_team, max_players=15)
 
+    images_by_shape_name = {
+    0: {  # Slide 1 (index 0)
+        "PH_Corners_left_positions_vis": fig_to_png_bytes(fig_att_L),
+        "PH_Corners_right_positions_vis": fig_to_png_bytes(fig_att_R),
+        "PH_Corners_left_shots_vis": fig_to_png_bytes(fig_att_shots_L),
+        "PH_Corners_right_shots_vis": fig_to_png_bytes(fig_att_shots_R),
+    },
+    1: {  # Slide 2 (index 1)
+        "PH_def_left": fig_to_png_bytes(fig_def_L),
+        "PH_def_right": fig_to_png_bytes(fig_def_R),
+    },
+}
+    
     images_by_token = {
-        "{Corners_left_positions_vis}": [fig_to_png_bytes(fig_att_L)],
-        "{Corners_right_positions_vis}": [fig_to_png_bytes(fig_att_R)],
-        "{Corners_left_shots_vis}": [fig_to_png_bytes(fig_att_shots_L)],
-        "{Corners_right_shots_vis}": [fig_to_png_bytes(fig_att_shots_R)],
-        # Template has duplicated token on slide 2 for def-left shots;
-        # we provide 2 images for the same token so the filler can place both shapes.
-        "{def_Corners_left_shots_vis}": [fig_to_png_bytes(fig_def_L), fig_to_png_bytes(fig_def_R)],
         "{att_corners_headers}": [fig_to_png_bytes_labels(fig_att_headers)] if fig_att_headers is not None else [],
         "{def_corners_headers}": [fig_to_png_bytes_labels(fig_def_headers)] if fig_def_headers is not None else [],
     }
@@ -372,6 +378,7 @@ def _generate_filled_pptx(
         logo_path=theme.logo_relpath if theme.logo_relpath and os.path.exists(theme.logo_relpath) else None,
         meta_replacements=meta,
         images_by_token=images_by_token,
+        images_by_shape_name=images_by_shape_name,  # <-- add this
         left_takers_df=results["tables"]["left"],
         right_takers_df=results["tables"]["right"],
     )

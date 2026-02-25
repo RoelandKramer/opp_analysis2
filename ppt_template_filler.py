@@ -28,6 +28,14 @@ from pptx.util import Pt
 # (Based on your manual crop screenshot: the issue is BOTH top and bottom padding.)
 # CROP_SPEC_ATT_LEFT = ("top", 0.15)  # 15% top AND 15% bottom
 # ---- Crop configuration per placeholder ----
+
+@dataclass(frozen=True)
+class CropSpec:
+    left: float = 0.0
+    right: float = 0.0
+    top: float = 0.0
+    bottom: float = 0.0
+
 CROP_BY_SHAPE_NAME: Dict[str, CropSpec] = {
     # Att Right (positions)
     "PH_Corners_right_positions_vis": CropSpec(
@@ -104,12 +112,6 @@ def fig_to_png_bytes_labels(fig: matplotlib.figure.Figure, *, dpi: int = 240) ->
 # Cropping
 # ============================================================
 
-@dataclass(frozen=True)
-class CropSpec:
-    left: float = 0.0
-    right: float = 0.0
-    top: float = 0.0
-    bottom: float = 0.0
 
 
 def _clamp(v: float, lo: float, hi: float) -> float:
@@ -513,23 +515,13 @@ def fill_corner_template_pptx(
         # 1) Named placeholders (authoritative)
         named_for_slide = (images_by_shape_name or {}).get(slide_idx, {})
         replaced_shape_names = set(named_for_slide.keys())
-
+        
         for shape_name, img_bytes in named_for_slide.items():
             crop_spec = CROP_BY_SHAPE_NAME.get(shape_name)
             if crop_spec is not None:
                 img_bytes = crop_png_bytes(img_bytes, crop=crop_spec)
-
-    _replace_named_shape_with_picture(slide, shape_name, img_bytes)
-            ok = _replace_named_shape_with_picture(slide, shape_name, img_bytes)
-
-            # If the named placeholder wasn't found (template mismatch),
-            # we do NOTHING here and let token placeholders handle it below.
-            # (That token path is also crop-aware for the left plot.)
-
-            if not ok:
-                # Keep going; token insertion might still place it if token exists.
-                pass
-
+        
+            _replace_named_shape_with_picture(slide, shape_name, img_bytes)
         # 2) Token placeholders (ONLY for not-renamed items)
         for token, imgs in (images_by_token or {}).items():
             if token in ("{top_bar}", "{bottom_bar}"):

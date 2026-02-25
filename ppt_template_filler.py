@@ -26,7 +26,7 @@ CROP_SHAPE_NAME = "PH_Corners_left_positions_vis"
 
 # Crop that plot after rendering: remove whitespace top+bottom.
 # (Based on your manual crop screenshot: the issue is BOTH top and bottom padding.)
-CROP_SPEC_ATT_LEFT = ("top_bottom", 0.15)  # 15% top AND 15% bottom
+CROP_SPEC_ATT_LEFT = ("top", 0.15)  # 15% top AND 15% bottom
 
 
 # ============================================================
@@ -125,10 +125,11 @@ def crop_png_bytes(img_bytes: bytes, *, crop: CropSpec) -> bytes:
 
 def _crop_att_left_plot(img_bytes: bytes) -> bytes:
     mode, frac = CROP_SPEC_ATT_LEFT
+    if mode == "top":
+        return crop_png_bytes(img_bytes, crop=CropSpec(top=frac))
     if mode == "top_bottom":
         return crop_png_bytes(img_bytes, crop=CropSpec(top=frac, bottom=frac))
     return img_bytes
-
 
 # ============================================================
 # GROUP-mapped traversal (handles scaling inside GROUPs)

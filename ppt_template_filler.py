@@ -34,6 +34,11 @@ def fig_to_png_bytes(fig: matplotlib.figure.Figure, *, dpi: int = 240) -> bytes:
         pass
 
     bio = io.BytesIO()
+    fig.patch.set_alpha(0)
+    for ax in fig.axes:
+        ax.set_position([0, 0, 1, 1])
+        ax.margins(0)
+        
     fig.savefig(
         bio,
         format="png",
@@ -44,7 +49,21 @@ def fig_to_png_bytes(fig: matplotlib.figure.Figure, *, dpi: int = 240) -> bytes:
     )
     return bio.getvalue()
 
-
+def fig_to_png_bytes_labels(fig: matplotlib.figure.Figure, *, dpi: int = 240) -> bytes:
+    """
+    Export keeping margins so y-axis labels are visible.
+    """
+    bio = io.BytesIO()
+    fig.savefig(
+        bio,
+        format="png",
+        dpi=dpi,
+        transparent=True,
+        bbox_inches="tight",
+        pad_inches=0.08,
+    )
+    return bio.getvalue()
+    
 # ---------------- GROUP-mapped traversal (handles scaling!) ----------------
 ShapeMapped = Tuple[object, int, int, int, int, Optional[object]]
 # (shape, abs_left, abs_top, abs_w, abs_h, parent_group_shape)

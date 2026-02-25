@@ -21,7 +21,7 @@ import streamlit as st
 import opp_analysis_new as oa
 import update_database as upd
 
-from ppt_template_filler import fill_corner_template_pptx, fig_to_png_bytes
+from ppt_template_filler import fill_corner_template_pptx, fig_to_png_bytes, fig_to_png_bytes_labels
 
 
 # --- Secrets -> env for git push (safe) ---

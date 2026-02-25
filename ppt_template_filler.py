@@ -207,7 +207,28 @@ def _is_bar_candidate(ax: int, ay: int, aw: int, ah: int, slide_w: int, slide_h:
     near_bottom = (ay + ah) >= int(slide_h * 0.86)
     return (near_top or near_bottom) and ax <= int(slide_w * 0.14)
 
+def _clear_token_text(shp, token: str) -> None:
+    """
+    Removes token occurrences from a text shape, leaving everything else intact.
+    """
+    if not getattr(shp, "has_text_frame", False):
+        return
+    tf = shp.text_frame
+    for para in tf.paragraphs:
+        for run in para.runs:
+            if run.text and token in run.text:
+                run.text = run.text.replace(token, "")
 
+
+def _color_and_clear(slide, token: str, *, hex_color: str) -> None:
+    """
+    Finds shapes containing token (your existing mapped token finder),
+    colors their fill, and clears the token text.
+    """
+    for shp, *_ in _find_shapes_with_token(slide, token):
+        _set_shape_fill(shp, hex_color=hex_color)
+        _clear_token_text(shp, token)
+        
 def _color_top_and_bottom_bars(slide, *, bar_hex: str, slide_w: int, slide_h: int) -> None:
     # heuristic (now using mapped coords)
     for shp, ax, ay, aw, ah, _ in iter_shapes_mapped(slide):
@@ -230,10 +251,9 @@ def _color_top_and_bottom_bars(slide, *, bar_hex: str, slide_w: int, slide_h: in
     if best is not None:
         _set_shape_fill(best[2], hex_color=bar_hex)
 
-    # always color bottom bar placeholder shape
-    for shp, *_ in _find_shapes_with_token(slide, "{bottom_bar}"):
-        _set_shape_fill(shp, hex_color=bar_hex)
-
+    # Explicit token-based bars (and remove the token text)
+    _color_and_clear(slide, "{top_bar}", hex_color=bar_hex)
+    _color_and_clear(slide, "{bottom_bar}", hex_color=bar_hex)
 
 def _set_header_text_white(slide, *, slide_h: int) -> None:
     threshold = int(slide_h * 0.16)

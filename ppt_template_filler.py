@@ -10,6 +10,7 @@ from typing import Dict, Iterable, List, Optional, Tuple
 
 import matplotlib.figure
 import pandas as pd
+from PIL import Image
 from pptx import Presentation
 from pptx.dml.color import RGBColor
 from pptx.enum.shapes import MSO_SHAPE_TYPE
@@ -70,6 +71,50 @@ def fig_to_png_bytes_labels(fig: matplotlib.figure.Figure, *, dpi: int = 240) ->
 
 
 # ============================================================
+# Cropping (user-controlled)
+# ============================================================
+
+@dataclass(frozen=True)
+class CropSpec:
+    """
+    Fractions in [0..0.45] typically.
+    Example: top=0.20 trims 20% from the top.
+    """
+    left: float = 0.0
+    right: float = 0.0
+    top: float = 0.0
+    bottom: float = 0.0
+
+
+def _clamp(v: float, lo: float, hi: float) -> float:
+    return max(lo, min(hi, v))
+
+
+def crop_png_bytes(img_bytes: bytes, *, crop: CropSpec) -> bytes:
+    """
+    Crops PNG bytes by fractional trims on each side.
+    """
+    im = Image.open(io.BytesIO(img_bytes)).convert("RGBA")
+    w, h = im.size
+
+    l = int(round(_clamp(crop.left, 0.0, 0.45) * w))
+    r = int(round(_clamp(crop.right, 0.0, 0.45) * w))
+    t = int(round(_clamp(crop.top, 0.0, 0.45) * h))
+    b = int(round(_clamp(crop.bottom, 0.0, 0.45) * h))
+
+    x0 = l
+    y0 = t
+    x1 = max(x0 + 1, w - r)
+    y1 = max(y0 + 1, h - b)
+
+    im = im.crop((x0, y0, x1, y1))
+
+    out = io.BytesIO()
+    im.save(out, format="PNG")
+    return out.getvalue()
+
+
+# ============================================================
 # GROUP-mapped traversal (handles scaling inside GROUPs)
 # ============================================================
 
@@ -103,9 +148,6 @@ def iter_shapes_mapped(
     base_sy: float = 1.0,
     parent_group: Optional[object] = None,
 ) -> Iterable[ShapeMapped]:
-    """
-    Yields shapes with true slide coords, including shapes inside scaled groups.
-    """
     for shp in container.shapes:
         rel_l, rel_t = int(shp.left), int(shp.top)
         rel_w, rel_h = int(shp.width), int(shp.height)
@@ -151,17 +193,12 @@ def _shape_text(shp) -> str:
         return ""
 
 
-def _shape_text_stripped(shp) -> str:
-    return (_shape_text(shp) or "").strip()
-
-
 def _replace_text_in_shape(shp, replacements: Dict[str, str]) -> None:
     if not getattr(shp, "has_text_frame", False):
         return
 
     tf = shp.text_frame
 
-    # run-level replacement
     for para in tf.paragraphs:
         for run in para.runs:
             txt = run.text or ""
@@ -170,7 +207,6 @@ def _replace_text_in_shape(shp, replacements: Dict[str, str]) -> None:
                     txt = txt.replace(k, v)
             run.text = txt
 
-    # paragraph-level (handles token split across runs)
     for para in tf.paragraphs:
         whole = "".join(run.text for run in para.runs)
         replaced = whole
@@ -186,9 +222,6 @@ def _replace_text_in_shape(shp, replacements: Dict[str, str]) -> None:
 
 
 def _clear_token_text(shp, token: str) -> None:
-    """
-    Remove token occurrences from a shape's text.
-    """
     if not getattr(shp, "has_text_frame", False):
         return
     tf = shp.text_frame
@@ -237,11 +270,11 @@ def _find_shapes_with_token(slide, token: str) -> List[ShapeMapped]:
     return out
 
 
+def _shape_text_stripped(shp) -> str:
+    return (_shape_text(shp) or "").strip()
+
+
 def _find_shapes_with_token_exact(slide, token: str) -> List[ShapeMapped]:
-    """
-    Only match shapes whose text is exactly the token (avoids sentence collisions).
-    Recommended for things like {def_Corners_left_shots_vis}.
-    """
     out: List[ShapeMapped] = []
     for shp, ax, ay, aw, ah, parent in iter_shapes_mapped(slide):
         if _shape_text_stripped(shp) == token:
@@ -281,19 +314,12 @@ def _color_and_clear_token_shapes(slide, token: str, *, hex_color: str) -> None:
 
 
 def _color_top_and_bottom_bars(slide, *, bar_hex: str, slide_w: int, slide_h: int) -> None:
-    """
-    Colors bars and clears {top_bar}/{bottom_bar} tokens from their text shapes if present.
-
-    - If you add a small invisible text box containing {top_bar} on the top bar,
-      this will color it deterministically.
-    - Same for {bottom_bar}.
-    """
-    # heuristic (fallback)
+    # heuristic fallback
     for shp, ax, ay, aw, ah, _ in iter_shapes_mapped(slide):
         if _is_bar_candidate(ax, ay, aw, ah, slide_w, slide_h):
             _set_shape_fill(shp, hex_color=bar_hex)
 
-    # token-based (preferred): color + remove placeholder text
+    # token-based deterministic (and remove placeholder text)
     _color_and_clear_token_shapes(slide, "{top_bar}", hex_color=bar_hex)
     _color_and_clear_token_shapes(slide, "{bottom_bar}", hex_color=bar_hex)
 
@@ -306,17 +332,12 @@ Target = Tuple[object, int, int, int, int]  # (token_shape_to_delete, left, top,
 
 
 def _find_token_targets(slide, token: str, *, exact: bool = True) -> List[Target]:
-    """
-    Replaces the token shape's bounds (mapped coords). If you keep groups,
-    token placement is still safe because mapped coords are slide-true.
-    """
     finder = _find_shapes_with_token_exact if exact else _find_shapes_with_token
     hits = finder(slide, token)
 
     out: List[Target] = []
     for token_shp, token_ax, token_ay, token_aw, token_ah, _ in hits:
         out.append((token_shp, token_ax, token_ay, token_aw, token_ah))
-
     return sorted(out, key=lambda t: (t[1], t[2]))
 
 
@@ -332,15 +353,9 @@ def _fill_token_with_images(slide, token: str, images: List[bytes], *, exact: bo
 
     for (del_shp, left, top, w, h), img in zip(targets, images):
         _insert_picture_fill(slide, delete_shape=del_shp, left=left, top=top, w=w, h=h, img_bytes=img)
-        # also remove token text if any remains (defensive)
-        _clear_token_text(del_shp, token)
 
 
 def _find_shape_by_name_mapped(slide, shape_name: str) -> Optional[ShapeMapped]:
-    """
-    Finds a shape by name anywhere (top-level or inside groups),
-    returning mapped slide coords + size.
-    """
     for shp, ax, ay, aw, ah, parent in iter_shapes_mapped(slide):
         if getattr(shp, "name", None) == shape_name:
             return shp, ax, ay, aw, ah, parent
@@ -348,10 +363,6 @@ def _find_shape_by_name_mapped(slide, shape_name: str) -> Optional[ShapeMapped]:
 
 
 def _replace_named_shape_with_picture(slide, shape_name: str, img_bytes: bytes) -> bool:
-    """
-    Replaces the named shape with a picture that exactly fills that shape's box.
-    Works even if the named shape is inside a scaled group (uses mapped coords).
-    """
     hit = _find_shape_by_name_mapped(slide, shape_name)
     if hit is None:
         return False
@@ -417,16 +428,9 @@ def fill_corner_template_pptx(
     right_takers_df: pd.DataFrame,
 ) -> FilledPptPayload:
     """
-    - Slide background: secondary color (plus recolor full-slide bg rectangles if present)
-    - Bars: primary color using {top_bar} / {bottom_bar} if present (also clears token text)
-    - Text placeholders: replaced via meta_replacements
-    - Images:
-        * First: by named shapes (images_by_shape_name[slide_index][shape_name] = bytes)
-        * Then: by token placeholders (images_by_token["{token}"] = [bytes...])
-      Token insertion uses exact token-only matching by default to avoid sentence collisions.
-    - Tables:
-        Slide 1: first table -> left_takers_df
-        Slide 2: first table -> right_takers_df
+    Adds ONE cropping behavior:
+      - For placeholder named "PH_Corners_left_positions_vis", crop top 20% BEFORE placing.
+      - Nothing else is cropped.
     """
     if not os.path.exists(template_pptx_path):
         raise FileNotFoundError(f"Template not found: {template_pptx_path}")
@@ -439,43 +443,38 @@ def fill_corner_template_pptx(
     base_repl.setdefault("{TEAM_NAME}", team_name)
 
     for slide_idx, slide in enumerate(prs.slides):
-        # backgrounds
         _set_slide_background(slide, bg_hex=team_secondary_hex)
         _color_background_rectangles(slide, bg_hex=team_secondary_hex, slide_w=slide_w, slide_h=slide_h)
-
-        # bars
         _color_top_and_bottom_bars(slide, bar_hex=team_primary_hex, slide_w=slide_w, slide_h=slide_h)
 
-        # text replacements everywhere
         for shp, *_ in iter_shapes_mapped(slide):
             _replace_text_in_shape(shp, base_repl)
 
-        # logo: if you still use token-based logo placeholder
+        # logo (token-based)
         if logo_path and os.path.exists(logo_path):
             with open(logo_path, "rb") as f:
                 logo_bytes = f.read()
-            # token-based (exact) to avoid collisions
             _fill_token_with_images(slide, "{LOGO}", [logo_bytes], exact=True)
 
-        # 1) Named placeholders (exact block fill)
+        # 1) Named placeholders
         named_for_slide = (images_by_shape_name or {}).get(slide_idx, {})
         for shape_name, img_bytes in named_for_slide.items():
+            if shape_name == "PH_Corners_left_positions_vis":
+                img_bytes = crop_png_bytes(img_bytes, crop=CropSpec(top=0.20))
             _replace_named_shape_with_picture(slide, shape_name, img_bytes)
 
         # 2) Token placeholders (for anything you did NOT rename)
         for token, imgs in (images_by_token or {}).items():
-            # bars are handled separately
             if token in ("{top_bar}", "{bottom_bar}"):
                 continue
-            # safest: exact token-only matching
             _fill_token_with_images(slide, token, imgs, exact=True)
 
-        # Clear any leftover bar tokens (in case they were added after replacements)
+        # Clear bar tokens
         for tok in ("{top_bar}", "{bottom_bar}"):
             for shp, *_ in _find_shapes_with_token(slide, tok):
                 _clear_token_text(shp, tok)
 
-    # tables (top-level tables only)
+    # tables
     if len(prs.slides) >= 1:
         t1 = _find_tables(prs.slides[0])
         if t1:

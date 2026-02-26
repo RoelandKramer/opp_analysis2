@@ -32,6 +32,18 @@ if "GITHUB_REPO" in st.secrets:
 os.environ["GITHUB_BRANCH"] = st.secrets.get("GITHUB_BRANCH", "main")
 
 
+# --- Canonicalization fallback for datasets that contain teams unknown to OA (e.g., women teams) ---
+_OA_GET_CANON = oa.get_canonical_team
+
+def _get_canonical_team_safe(name):
+    canon = _OA_GET_CANON(name)
+    if canon:
+        return canon  # keep existing men's mapping behavior
+    s = str(name).strip() if name is not None else ""
+    return s or None  # fallback: identity for unknown teams
+
+oa.get_canonical_team = _get_canonical_team_safe  # monkeypatch: makes women teams work end-to-end
+
 st.set_page_config(page_title="Opponent Analysis - Set Pieces", layout="wide")
 
 # Versioning so cache invalidates after DB update

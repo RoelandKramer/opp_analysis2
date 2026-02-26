@@ -542,7 +542,7 @@ if generate:
         st.error(f"❌ Template PPTX not found at `{TEMPLATE_PPTX}`. Put it in the repo root.")
         st.stop()
 
-    with st.spinner("Generating filled PowerPoint..."):
+    with st.spinner("Generating Corner Analysis"):
         pptx_bytes, fname = _generate_filled_pptx(
             json_data_full=json_data_full,
             selected_team=st.session_state.selected_team,

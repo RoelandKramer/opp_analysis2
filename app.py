@@ -194,7 +194,7 @@ def get_canonical_team_options(json_data_full: dict, cache_buster: str) -> List[
     return sorted(canon)
 
 
-@st.cache_data@st.cache_data
+@st.cache_data
 def load_shot_map_from_full_sequences(seq_csv_path: str, cache_buster: str) -> Dict[Tuple[str, str], bool]:
     """
     (match_id, corner_sequence_id) -> True if that CORNER SEQUENCE contains a shot.

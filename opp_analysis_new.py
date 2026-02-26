@@ -216,7 +216,7 @@ TEAM_NAME_MAPPING: Dict[str, Optional[str]] = {
     "Vitesse": "Vitesse",
     "Willem II": "Willem II",
     "FC Twente W" : "FC Twente W",
-    "ADO Den Haag W: : "ADO Den Haag W",
+    "ADO Den Haag W" : "ADO Den Haag W",
     "AZ W" : "AZ W",
     "Ajax W" : Ajax W",,
     "Excelsior Rotterdam W" : "Excelsior Rotterdam W",

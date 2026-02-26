@@ -166,18 +166,6 @@ def load_corner_jsonlike(csv_path: str, cache_buster: str):
 
 
 @st.cache_data
-def load_events_sequences(csv_path: str, cache_buster: str) -> pd.DataFrame:
-    _ = cache_buster
-    return pd.read_csv(csv_path, low_memory=False).where(pd.notnull, None)
-
-
-@st.cache_data
-def load_headers(csv_path: str, cache_buster: str) -> pd.DataFrame:
-    _ = cache_buster
-    return oa.load_corner_positions_headers(csv_path)
-
-
-@st.cache_data
 def get_analysis_results(json_data, team_name: str, cache_buster: str):
     _ = cache_buster
     return oa.process_corner_data(json_data, team_name)
@@ -266,7 +254,7 @@ def _center_container_css() -> None:
           [data-testid="stAppViewContainer"] { background: #FFFFFF; }
           [data-testid="stHeader"] { background: transparent; }
           header { background: transparent !important; }
-          section.main > div { padding-top: 1.25rem; padding-bottom: 2.0rem; }
+          section.main > div { padding-top: 0.75rem; padding-bottom: 1.5rem; }
           .block-container { max-width: 1200px; }
           div[data-testid="stVerticalBlock"] > div { gap: 0.75rem; }
         </style>
@@ -297,7 +285,7 @@ def _render_header(
         <style>
           .team-banner {{
             position: relative; width: 100%; border-radius: 18px; overflow: hidden;
-            margin: 0.15rem 0 1.0rem 0; box-shadow: 0 10px 28px rgba(0,0,0,0.14);
+            margin: 0 0 1.0rem 0; box-shadow: 0 10px 28px rgba(0,0,0,0.14);
           }}
           .team-banner-top {{ background: {primary_hex}; padding: 1.2rem 1.4rem 0.95rem 1.4rem; }}
           .team-banner-bottom {{
@@ -367,7 +355,6 @@ def _generate_filled_pptx(
     theme = _theme_for_team(themes, selected_team)
     set_matplotlib_bg("#FFFFFF")
 
-    # Slide 1 plots
     fig_att_L = oa.plot_percent_attacking(
         get_img_path("att_L"),
         viz_config["att_L"],
@@ -407,7 +394,6 @@ def _generate_filled_pptx(
         font_size=16,
     )
 
-    # Slide 2 plots
     (tot_dL, ids_dL, pcts_dL) = results["defensive"]["left"]
     fig_def_L = oa.plot_shots_defensive(get_img_path("def_L"), viz_config["def_L"], pcts_dL, tot_dL, ids_dL)
 
@@ -416,16 +402,18 @@ def _generate_filled_pptx(
 
     fig_att_headers = None
     fig_def_headers = None
-
-    if os.path.exists(HEADERS_CSV) and os.path.exists(EVENTS_SEQ_CSV):
-        headers_df = load_headers(HEADERS_CSV, st.session_state.dataset_id)
-        seq_df = load_events_sequences(EVENTS_SEQ_CSV, st.session_state.dataset_id)
-        headers_df = oa.attach_actual_club_from_events(headers_df, seq_df)
-        team_c = oa._canon_team(selected_team) or selected_team
-        df_team = headers_df[headers_df["club_actual_canon"] == team_c].copy()
-        if not df_team.empty:
-            fig_att_headers = oa.plot_attacking_corner_players_headers(df_team, max_players=15)
-            fig_def_headers = oa.plot_defending_corner_players_diverging(df_team, max_players=15)
+    try:
+        if os.path.exists(HEADERS_CSV) and os.path.exists(EVENTS_SEQ_CSV):
+            headers_df = oa.load_corner_positions_headers(HEADERS_CSV)
+            seq_df = pd.read_csv(EVENTS_SEQ_CSV, low_memory=False).where(pd.notnull, None)
+            headers_df = oa.attach_actual_club_from_events(headers_df, seq_df)
+            team_c = oa._canon_team(selected_team) or selected_team
+            df_team = headers_df[headers_df["club_actual_canon"] == team_c].copy()
+            if not df_team.empty:
+                fig_att_headers = oa.plot_attacking_corner_players_headers(df_team, max_players=15)
+                fig_def_headers = oa.plot_defending_corner_players_diverging(df_team, max_players=15)
+    except Exception:
+        pass
 
     images_by_shape_name = {
         0: {
@@ -443,7 +431,6 @@ def _generate_filled_pptx(
     images_by_token = {
         "{att_corners_headers}": [fig_to_png_bytes_labels(fig_att_headers)] if fig_att_headers is not None else [],
         "{def_corners_headers}": [fig_to_png_bytes_labels(fig_def_headers)] if fig_def_headers is not None else [],
-        # If you moved these to tokens, keep them here too (safe no-op if not in template)
         "{Corners_left_shots_vis}": [fig_to_png_bytes(fig_att_shots_L)],
         "{Corners_right_shots_vis}": [fig_to_png_bytes(fig_att_shots_R)],
         "{def_Corner_left_shots_vis}": [fig_to_png_bytes(fig_def_L)],
@@ -456,9 +443,7 @@ def _generate_filled_pptx(
         "{nrc}": str(results.get("own_right_count", 0)),
         "{MATCHES_ANALYZED}": str(matches_analyzed_total),
         "{bottom_bar}": theme.rest_hex,
-        "bottom_bar": theme.rest_hex,
         "{middle_bar}": theme.rest_hex,
-        "middle_bar": theme.rest_hex,
     }
 
     payload = fill_corner_template_pptx(
@@ -490,10 +475,6 @@ if not all_teams:
     st.stop()
 
 themes = build_team_themes()
-
-# Main content: header -> configuration -> generate button
-st.subheader("Opponent Analysis - Set Pieces")
-
 selected_team = st.selectbox("Select team", all_teams)
 
 matches_full = json_data_full.get("matches", []) or []
@@ -517,6 +498,8 @@ n_last = st.slider(
 window_label = "All" if n_last >= team_total else f"Last {n_last}"
 
 theme = _theme_for_team(themes, selected_team)
+
+# ✅ Colored header at the very top (remove the plain white title)
 _render_header(
     team=selected_team,
     primary_hex=theme.top_hex,
@@ -525,6 +508,9 @@ _render_header(
     window_label=window_label,
     matches_analyzed=team_total,
 )
+
+# Configuration (under colored header)
+st.subheader("Configuration")
 
 generate = st.button("Generate corner analysis", type="primary", width="stretch")
 
@@ -551,7 +537,7 @@ if generate:
         width="stretch",
     )
 
-# Sidebar: Add data
+# Sidebar: Add data + latest match
 with st.sidebar:
     st.header("Add data")
 
@@ -566,6 +552,14 @@ with st.sidebar:
     )
 
     run_update = st.button("Update database", type="primary", disabled=not uploaded_files, width="stretch")
+
+    # ✅ Latest match caption under update button (as requested)
+    latest_dt, latest_name = oa.get_latest_match_info(json_data_full)
+    st.caption(
+        f"Latest match in dataset: {latest_dt.strftime('%d-%m-%Y')} — {latest_name}"
+        if latest_dt and latest_name
+        else "Latest match in dataset: -"
+    )
 
     if run_update:
         uploads_root = Path("data/_uploads")
@@ -608,10 +602,3 @@ with st.sidebar:
             else:
                 st.error(f"❌ Update failed: {result.get('error', 'Unknown error')}")
                 st.write(result)
-
-latest_dt, latest_name = oa.get_latest_match_info(json_data_full)
-st.caption(
-    f"Latest match in dataset: {latest_dt.strftime('%d-%m-%Y')} — {latest_name}"
-    if latest_dt and latest_name
-    else "Latest match in dataset: -"
-)

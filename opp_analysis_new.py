@@ -678,16 +678,26 @@ def process_corner_data(
             )
             e["zone"], e["corner_side"] = zone_end, e_side
 
-            seq_id_raw = e.get("sequenceId")
-            seq_id_norm = str(seq_id_raw) if seq_id_raw is not None else ""
-            # ✅ prefer full_sequences-derived shot_map when available
-            if match_id and seq_id_norm and (match_id, seq_id_norm) in shot_map:
-                seq_has_shot = bool(shot_map[(match_id, seq_id_norm)])
+            match_id = str(match.get("match_id") or "").strip()
+            
+            # ✅ Prefer corner_sequence_id for "corner -> shot"
+            corner_seq = e.get("corner_sequence_id")
+            if corner_seq is None:
+                corner_seq = e.get("corner_sequenceId")
+            if corner_seq is None:
+                corner_seq = e.get("sequenceId")
+            
+            corner_seq_s = str(corner_seq).strip() if corner_seq is not None else ""
+            
+            # Source of truth: full_sequences shot_map
+            if shot_map and match_id and corner_seq_s:
+                seq_has_shot = bool(shot_map.get((match_id, corner_seq_s), False))
             else:
-                seq_has_shot = _sequence_has_shot(sequences_by_id.get(seq_id_raw, [])) if (seq_id_raw is not None) else False
-
+                # Fallback if shot_map not provided
+                seq_id = e.get("sequenceId")
+                seq_has_shot = _sequence_has_shot(sequences_by_id.get(seq_id, [])) if (seq_id is not None) else False
+            
             e["seq_has_shot"] = bool(seq_has_shot)
-
             if e_side == "left":
                 (own_left_side if is_own else opponent_left_side).append(e)
             else:
@@ -697,8 +707,7 @@ def process_corner_data(
                 seq_evs = sequences_by_id.get(seq_id_raw, [])
                 if not seq_evs:
                     continue
-                key = (match.get("match_id"), seq_id_raw, is_own)
-                if key not in _seen_seq_keys:
+                    key = (match_id, corner_seq_s, is_own)                if key not in _seen_seq_keys:
                     _seen_seq_keys.add(key)
                     for sev in seq_evs:
                         sev["zone"], sev["corner_side"] = zone_end, e_side
@@ -744,7 +753,7 @@ def process_corner_data(
 def compute_league_attacking_corner_shot_rates(
     json_data: Dict[str, Any],
     *,
-    shot_map: Optional[ShotMap] = None,
+    shot_map: Optional[Dict[Tuple[str, str], bool]] = None,
 ) -> Dict[str, Dict[str, Dict[str, Dict[str, float]]]]:
     matches = json_data.get("matches", [])
     stats: Dict[str, Dict[str, Dict[str, Dict[str, float]]]] = {}

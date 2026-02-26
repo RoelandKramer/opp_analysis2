@@ -81,6 +81,21 @@ def build_team_themes() -> Dict[str, TeamTheme]:
         "Vitesse": TeamTheme("#000000", "#FFD500", "logos/vitesse.png"),
         "VVV-Venlo": TeamTheme("#12100B", "#FEE000", "logos/vvv_venlo.png"),
         "Willem II": TeamTheme("#242C84", "#FFFFFF", "logos/willem_ii.png"),
+        
+        "Ajax W": TeamTheme("#C31F3D", "#FFFFFF", "logos/jong_ajax.png"),
+        "Ado Den Haag W": TeamTheme("#00802C", "#FFE200", "logos/ado_den_haag.png"),
+        "PSV W": TeamTheme("#E62528", "#FFFFFF", "logos/jong_psv.png"),
+        "AZ W": TeamTheme("#DB0021", "#FFFFFF", "logos/jong_az.png"),
+        "Utrecht W": TeamTheme("#ED1A2F", "#FFFFFF", "logos/jong_fc_utrecht.png"),
+    
+        "Excelsior Rotterdam W": TeamTheme("#E2001A", "#000000", "logos/excelsior_rotterdam.png"),
+        "SC Heerenveen W": TeamTheme("#004F9F", "#FFFFFF", "logos/sc_heerenveen.png"),
+        "FC Twente W": TeamTheme("#E6001A", "#FFFFFF", "logos/fc_twente.png"),
+        "Hera United W": TeamTheme("#191970", "#FFFFFF", "logos/hera_united.png"),
+        "NAC Breda W": TeamTheme("#282828", "#FFDD25", "logos/nac_breda.png"),
+        "Feyenoord W": TeamTheme("#FF0000", "#000000", "logos/feyenoord.png"),
+        "PEC Zwolle W": TeamTheme("#1E59AE", "#6AC2EE", "logos/pec_zwolle.png"),
+
     }
 
 

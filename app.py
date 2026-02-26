@@ -462,7 +462,191 @@ def _generate_filled_pptx(
     )
     return payload.pptx_bytes, payload.filename
 
+# ============================================================
+# file: app.py  (ADD THIS DEBUG HELPERS BLOCK)
+# ============================================================
+from collections import defaultdict, Counter
 
+def _norm_seq_id(x: Any) -> Optional[str]:
+    if x is None:
+        return None
+    s = str(x).strip()
+    return s if s else None
+
+def _is_shot_event(ev: Dict[str, Any]) -> bool:
+    bt = str(ev.get("baseTypeName") or "").strip().upper()
+    if bt == "SHOT":
+        return True
+    try:
+        if int(ev.get("baseTypeId")) == 6:
+            return True
+    except Exception:
+        pass
+    # fallback signals (women feeds sometimes differ)
+    if ev.get("shotTypeId") is not None or str(ev.get("shotTypeName") or "").strip():
+        return True
+    rn = str(ev.get("resultName") or "").strip().upper()
+    if "SHOT" in rn or "GOAL" in rn:
+        return True
+    if rn in {"WIDE", "SAVED", "BLOCKED", "ON_TARGET", "OFF_TARGET", "GOAL"}:
+        return True
+    labels = ev.get("labels")
+    if isinstance(labels, list):
+        s = " ".join(str(x) for x in labels).upper()
+        if "SHOT" in s or "GOAL" in s:
+            return True
+    return False
+
+def _corner_start_truthy(ev: Dict[str, Any]) -> bool:
+    # mirrors oa._is_true_corner_start but independent
+    if ev.get("possessionTypeName") != "CORNER":
+        return False
+    v = ev.get("sequenceStart")
+    if v is True:
+        return True
+    if isinstance(v, (int, float)) and v == 1:
+        return True
+    if isinstance(v, str) and v.strip().lower() in {"true", "1", "yes"}:
+        return True
+    return False
+
+def _team_matches(json_data_full: dict, team: str) -> List[dict]:
+    matches = json_data_full.get("matches", []) or []
+    out = []
+    for m in matches:
+        evs = m.get("corner_events", []) or []
+        teams_in_match = set()
+        for ev in evs:
+            t = oa.get_canonical_team(ev.get("teamName"))
+            if t:
+                teams_in_match.add(t)
+        if team in teams_in_match:
+            out.append(m)
+    return out
+
+def _render_shot_debug_panel(json_data_full: dict, selected_team: str, n_last: int) -> None:
+    with st.expander("🧪 Debug: why are shots from corners = 0?", expanded=True):
+        matches = _team_matches(json_data_full, selected_team)
+        matches_sorted = sorted(matches, key=lambda m: m.get("match_date") or datetime.min, reverse=True)
+        window = matches_sorted[: max(1, int(n_last or 1))]
+
+        st.write("Selected team:", selected_team)
+        st.write("Matches for team:", len(matches), "| Window:", len(window))
+
+        rows = []
+        examples = []
+
+        for m in window:
+            evs = m.get("corner_events", []) or []
+            mid = str(m.get("match_id", ""))
+            mname = m.get("match_name", "")
+
+            # team corners (corner starts)
+            team_corner_starts = [
+                ev for ev in evs
+                if (oa.get_canonical_team(ev.get("teamName")) == selected_team)
+                and _corner_start_truthy(ev)
+            ]
+
+            # all shot events in match
+            shot_events = [ev for ev in evs if _is_shot_event(ev)]
+
+            # seqId typing / normalization diagnostics
+            corner_seq_raw_types = Counter(type(ev.get("sequenceId")).__name__ for ev in team_corner_starts)
+            shot_seq_raw_types = Counter(type(ev.get("sequenceId")).__name__ for ev in shot_events)
+
+            corner_seq_raw = [ev.get("sequenceId") for ev in team_corner_starts if ev.get("sequenceId") is not None]
+            shot_seq_raw = [ev.get("sequenceId") for ev in shot_events if ev.get("sequenceId") is not None]
+
+            corner_seq_norm = set(_norm_seq_id(x) for x in corner_seq_raw)
+            shot_seq_norm = set(_norm_seq_id(x) for x in shot_seq_raw)
+            corner_seq_norm.discard(None)
+            shot_seq_norm.discard(None)
+
+            # intersection: do we have a shot in same sequence as a corner start?
+            intersect_norm = corner_seq_norm.intersection(shot_seq_norm)
+
+            # also check raw intersection (often fails if types differ)
+            intersect_raw = set(map(str, corner_seq_raw)).intersection(set(map(str, shot_seq_raw))) if corner_seq_raw and shot_seq_raw else set()
+
+            # gather a couple examples where there SHOULD be a hit
+            if intersect_norm and len(examples) < 6:
+                sid = next(iter(intersect_norm))
+                # pick one corner + one shot from that sequence
+                c_ex = next((ev for ev in team_corner_starts if _norm_seq_id(ev.get("sequenceId")) == sid), None)
+                s_ex = next((ev for ev in shot_events if _norm_seq_id(ev.get("sequenceId")) == sid), None)
+                examples.append(
+                    {
+                        "match_name": mname,
+                        "seq_id_norm": sid,
+                        "corner_baseTypeName": (c_ex or {}).get("baseTypeName"),
+                        "corner_baseTypeId": (c_ex or {}).get("baseTypeId"),
+                        "corner_sequenceId": (c_ex or {}).get("sequenceId"),
+                        "corner_sequenceStart": (c_ex or {}).get("sequenceStart"),
+                        "shot_baseTypeName": (s_ex or {}).get("baseTypeName"),
+                        "shot_baseTypeId": (s_ex or {}).get("baseTypeId"),
+                        "shot_resultName": (s_ex or {}).get("resultName"),
+                        "shot_sequenceId": (s_ex or {}).get("sequenceId"),
+                        "shot_labels": (s_ex or {}).get("labels"),
+                    }
+                )
+
+            rows.append(
+                {
+                    "match_id": mid,
+                    "match_name": mname,
+                    "events": len(evs),
+                    "team_corner_starts": len(team_corner_starts),
+                    "match_shot_events": len(shot_events),
+                    "corner_seq_types": dict(corner_seq_raw_types),
+                    "shot_seq_types": dict(shot_seq_raw_types),
+                    "corner_seq_unique": len(corner_seq_norm),
+                    "shot_seq_unique": len(shot_seq_norm),
+                    "corner∩shot_seq_norm": len(intersect_norm),
+                    "corner∩shot_seq_raw_str": len(intersect_raw),
+                }
+            )
+
+        df = pd.DataFrame(rows)
+        st.dataframe(df, width="stretch", hide_index=True)
+
+        total_corner_starts = int(df["team_corner_starts"].sum()) if not df.empty else 0
+        total_shots_in_matches = int(df["match_shot_events"].sum()) if not df.empty else 0
+        total_intersections = int(df["corner∩shot_seq_norm"].sum()) if not df.empty else 0
+
+        st.markdown(
+            f"""
+            **Totals in window**
+            - Team corner starts: **{total_corner_starts}**
+            - Shot events in matches: **{total_shots_in_matches}**
+            - Corner→Shot sequence overlaps (normalized seqId): **{total_intersections}**
+            """
+        )
+
+        if total_corner_starts == 0:
+            st.error(
+                "No team corner starts detected. Likely `possessionTypeName`/`sequenceStart` differs from expectations."
+            )
+        elif total_shots_in_matches == 0:
+            st.error(
+                "No shot events detected in these matches. Likely `baseTypeName/baseTypeId/resultName/labels` differ."
+            )
+        elif total_intersections == 0:
+            st.error(
+                "Shots exist in the match, but none share a sequenceId with corner starts. "
+                "Most likely `sequenceId` mismatch (type/format) or shots use different sequence linkage."
+            )
+
+        if examples:
+            st.subheader("Examples: corner + shot from same normalized sequenceId")
+            st.dataframe(pd.DataFrame(examples), width="stretch", hide_index=True)
+        else:
+            st.info("No corner+shot sequence overlap examples found in this window.")
+
+        st.caption(
+            "If `corner∩shot_seq_norm` is > 0 here but OA still reports 0 shots, "
+            "your OA code is probably failing to group sequences due to raw seqId typing or strict shot detection."
+        )
 # ---------------- UI ----------------
 _center_container_css()
 
@@ -535,6 +719,8 @@ n_last = st.slider(
     step=1,
     key="n_last",
 )
+
+_render_shot_debug_panel(json_data_full, st.session_state.selected_team, n_last)
 
 generate = st.button("Generate corner analysis", type="primary", width="stretch")
 if generate:

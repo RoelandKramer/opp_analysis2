@@ -81,13 +81,13 @@ def build_team_themes() -> Dict[str, TeamTheme]:
         "Vitesse": TeamTheme("#000000", "#FFD500", "logos/vitesse.png"),
         "VVV-Venlo": TeamTheme("#12100B", "#FEE000", "logos/vvv_venlo.png"),
         "Willem II": TeamTheme("#242C84", "#FFFFFF", "logos/willem_ii.png"),
-        
+        # Women teams reusing existing logos/colors (name stays with W)
         "Ajax W": TeamTheme("#C31F3D", "#FFFFFF", "logos/jong_ajax.png"),
         "Ado Den Haag W": TeamTheme("#00802C", "#FFE200", "logos/ado_den_haag.png"),
         "PSV W": TeamTheme("#E62528", "#FFFFFF", "logos/jong_psv.png"),
         "AZ W": TeamTheme("#DB0021", "#FFFFFF", "logos/jong_az.png"),
         "Utrecht W": TeamTheme("#ED1A2F", "#FFFFFF", "logos/jong_fc_utrecht.png"),
-    
+        # Women teams FIND_OUT
         "Excelsior Rotterdam W": TeamTheme("#E2001A", "#000000", "logos/excelsior_rotterdam.png"),
         "SC Heerenveen W": TeamTheme("#004F9F", "#FFFFFF", "logos/sc_heerenveen.png"),
         "FC Twente W": TeamTheme("#E6001A", "#FFFFFF", "logos/fc_twente.png"),
@@ -95,7 +95,6 @@ def build_team_themes() -> Dict[str, TeamTheme]:
         "NAC Breda W": TeamTheme("#282828", "#FFDD25", "logos/nac_breda.png"),
         "Feyenoord W": TeamTheme("#FF0000", "#000000", "logos/feyenoord.png"),
         "PEC Zwolle W": TeamTheme("#1E59AE", "#6AC2EE", "logos/pec_zwolle.png"),
-
     }
 
 
@@ -103,7 +102,6 @@ def set_matplotlib_bg(bg_hex: str) -> None:
     mpl.rcParams["figure.facecolor"] = bg_hex
     mpl.rcParams["savefig.facecolor"] = bg_hex
     mpl.rcParams["axes.facecolor"] = bg_hex
-
 
 
 DATA_ROOT = Path(os.getenv("APP_DATA_ROOT", "data"))
@@ -141,11 +139,6 @@ def load_headers(csv_path: str) -> pd.DataFrame:
 
 
 @st.cache_data
-def get_team_list(json_data):
-    return oa.extract_all_teams(json_data)
-
-
-@st.cache_data
 def get_analysis_results(json_data, team_name: str):
     return oa.process_corner_data(json_data, team_name)
 
@@ -155,10 +148,28 @@ def get_league_stats(json_data):
     return oa.compute_league_attacking_corner_shot_rates(json_data)
 
 
-def _match_has_team(match: dict, team_canon: str) -> bool:
+@st.cache_data
+def get_team_list_from_teamName(json_data_full: dict) -> List[str]:
+    teams: set[str] = set()
+    for match in (json_data_full.get("matches", []) or []):
+        for ev in (match.get("corner_events", []) or []):
+            tn = ev.get("teamName")
+            if tn is None:
+                continue
+            s = str(tn).strip()
+            if s:
+                teams.add(s)
+    return sorted(teams)
+
+
+def _match_has_team(match: dict, team_name: str) -> bool:
+    # Keep men's canonicalization logic, but DO NOT rename the displayed team.
+    team_canon = oa.get_canonical_team(team_name) or team_name
+
     events = match.get("corner_events", []) or []
     if not events:
         return False
+
     teams_in_match = {
         oa.get_canonical_team(ev.get("teamName"))
         for ev in events
@@ -220,7 +231,14 @@ def _center_container_css() -> None:
     )
 
 
-def _render_header(team: str, primary_hex: str, secondary_hex: str, logo_path: str, window_label: str, matches_analyzed: Optional[int]) -> None:
+def _render_header(
+    team: str,
+    primary_hex: str,
+    secondary_hex: str,
+    logo_path: str,
+    window_label: str,
+    matches_analyzed: Optional[int],
+) -> None:
     logo_b64 = None
     if logo_path and os.path.exists(logo_path):
         with open(logo_path, "rb") as f:
@@ -303,8 +321,7 @@ def _generate_filled_pptx(
     theme = themes.get(selected_team) or TeamTheme("#111827", "#FFFFFF", f"logos/{slugify(selected_team)}.png")
     set_matplotlib_bg("#FFFFFF")
 
-    # Plots -> PNG bytes
-    # Slide 1:
+    # Slide 1
     fig_att_L = oa.plot_percent_attacking(
         get_img_path("att_L"),
         viz_config["att_L"],
@@ -344,7 +361,7 @@ def _generate_filled_pptx(
         font_size=16,
     )
 
-    # Slide 2:
+    # Slide 2
     (tot_dL, ids_dL, pcts_dL) = results["defensive"]["left"]
     fig_def_L = oa.plot_shots_defensive(get_img_path("def_L"), viz_config["def_L"], pcts_dL, tot_dL, ids_dL)
 
@@ -365,18 +382,18 @@ def _generate_filled_pptx(
             fig_def_headers = oa.plot_defending_corner_players_diverging(df_team, max_players=15)
 
     images_by_shape_name = {
-    0: {  # Slide 1 (index 0)
-        "PH_Corners_left_positions_vis": fig_to_png_bytes(fig_att_L),
-        "PH_Corners_right_positions_vis": fig_to_png_bytes(fig_att_R),
-        "PH_Corners_left_shots_vis": fig_to_png_bytes(fig_att_shots_L),
-        "PH_Corners_right_shots_vis": fig_to_png_bytes(fig_att_shots_R),
-    },
-    1: {  # Slide 2 (index 1)
-        "PH_def_left": fig_to_png_bytes(fig_def_L),
-        "PH_def_right": fig_to_png_bytes(fig_def_R),
-    },
-}
-    
+        0: {  # Slide 1
+            "PH_Corners_left_positions_vis": fig_to_png_bytes(fig_att_L),
+            "PH_Corners_right_positions_vis": fig_to_png_bytes(fig_att_R),
+            "PH_Corners_left_shots_vis": fig_to_png_bytes(fig_att_shots_L),
+            "PH_Corners_right_shots_vis": fig_to_png_bytes(fig_att_shots_R),
+        },
+        1: {  # Slide 2
+            "PH_def_left": fig_to_png_bytes(fig_def_L),
+            "PH_def_right": fig_to_png_bytes(fig_def_R),
+        },
+    }
+
     images_by_token = {
         "{att_corners_headers}": [fig_to_png_bytes_labels(fig_att_headers)] if fig_att_headers is not None else [],
         "{def_corners_headers}": [fig_to_png_bytes_labels(fig_def_headers)] if fig_def_headers is not None else [],
@@ -396,7 +413,7 @@ def _generate_filled_pptx(
         logo_path=theme.logo_relpath if theme.logo_relpath and os.path.exists(theme.logo_relpath) else None,
         meta_replacements=meta,
         images_by_token=images_by_token,
-        images_by_shape_name=images_by_shape_name,  # <-- add this
+        images_by_shape_name=images_by_shape_name,
         left_takers_df=results["tables"]["left"],
         right_takers_df=results["tables"]["right"],
     )
@@ -411,7 +428,9 @@ if not os.path.exists(CORNER_EVENTS_CSV):
     st.stop()
 
 json_data_full = load_corner_jsonlike(CORNER_EVENTS_CSV)
-all_teams = get_team_list(json_data_full)
+
+# ✅ Dropdown must be all unique values from "teamName" in events_all_matches.csv (loaded jsonlike)
+all_teams = get_team_list_from_teamName(json_data_full)
 if not all_teams:
     st.error("❌ No teams found in dataset.")
     st.stop()

@@ -38,26 +38,25 @@ _OA_GET_CANON = oa.get_canonical_team
 def _get_canonical_team_safe(name):
     canon = _OA_GET_CANON(name)
     if canon:
-        return canon  # keep existing men's mapping behavior
+        return canon
     s = str(name).strip() if name is not None else ""
-    return s or None  # fallback: identity for unknown teams
+    return s or None
 
 
-oa.get_canonical_team = _get_canonical_team_safe  # enables women teams end-to-end
+oa.get_canonical_team = _get_canonical_team_safe
 
 
 st.set_page_config(page_title="Opponent Analysis - Set Pieces", layout="wide")
 
 APP_BG = "#FFFFFF"
-TEMPLATE_PPTX = "template_opp_analysis.pptx"  # keep in repo root
+TEMPLATE_PPTX = "template_opp_analysis.pptx"
 
 DATA_ROOT = Path(os.getenv("APP_DATA_ROOT", "data"))
 CORNER_EVENTS_CSV = str(DATA_ROOT / "corner_events_all_matches.csv")
 EVENTS_SEQ_CSV = str(DATA_ROOT / "corner_events_full_sequences.csv")
 HEADERS_CSV = str(DATA_ROOT / "corner_positions_headers.csv")
 
-# Cache busting (covers dataset switch + canon monkeypatch)
-CANON_PATCH_VERSION = "v2"  # bump if you change canon/shot fallback logic
+CANON_PATCH_VERSION = "v3"
 DATASET_ID = f"{DATA_ROOT.resolve()}::{CANON_PATCH_VERSION}"
 
 if st.session_state.get("dataset_id") != DATASET_ID:
@@ -67,7 +66,7 @@ if st.session_state.get("dataset_id") != DATASET_ID:
     st.cache_data.clear()
 
 if "analysis_cache" not in st.session_state:
-    st.session_state.analysis_cache = {}  # key: (dataset_id, dataset_version, team, n_last)
+    st.session_state.analysis_cache = {}
 
 
 @dataclass(frozen=True)
@@ -106,13 +105,11 @@ def build_team_themes() -> Dict[str, TeamTheme]:
         "Vitesse": TeamTheme("#000000", "#FFD500", "logos/vitesse.png"),
         "VVV-Venlo": TeamTheme("#12100B", "#FEE000", "logos/vvv_venlo.png"),
         "Willem II": TeamTheme("#242C84", "#FFFFFF", "logos/willem_ii.png"),
-        # Women teams reusing existing logos/colors (name stays with W)
         "Ajax W": TeamTheme("#C31F3D", "#FFFFFF", "logos/jong_ajax.png"),
         "Ado Den Haag W": TeamTheme("#00802C", "#FFE200", "logos/ado_den_haag.png"),
         "PSV W": TeamTheme("#E62528", "#FFFFFF", "logos/jong_psv.png"),
         "AZ W": TeamTheme("#DB0021", "#FFFFFF", "logos/jong_az.png"),
         "Utrecht W": TeamTheme("#ED1A2F", "#FFFFFF", "logos/jong_fc_utrecht.png"),
-        # Women teams (FIND_OUT)
         "Excelsior Rotterdam W": TeamTheme("#E2001A", "#000000", "logos/excelsior_rotterdam.png"),
         "SC Heerenveen W": TeamTheme("#004F9F", "#FFFFFF", "logos/sc_heerenveen.png"),
         "FC Twente W": TeamTheme("#E6001A", "#FFFFFF", "logos/fc_twente.png"),
@@ -120,7 +117,6 @@ def build_team_themes() -> Dict[str, TeamTheme]:
         "NAC Breda W": TeamTheme("#282828", "#FFDD25", "logos/nac_breda.png"),
         "Feyenoord W": TeamTheme("#FF0000", "#000000", "logos/feyenoord.png"),
         "PEC Zwolle W": TeamTheme("#1E59AE", "#6AC2EE", "logos/pec_zwolle.png"),
-        # Dataset has uppercase variant
         "PEC ZWOLLE W": TeamTheme("#1E59AE", "#6AC2EE", "logos/pec_zwolle.png"),
     }
 
@@ -128,24 +124,19 @@ def build_team_themes() -> Dict[str, TeamTheme]:
 def _theme_for_team(themes: Dict[str, TeamTheme], team: str) -> TeamTheme:
     if not team:
         return TeamTheme("#111827", "#FFFFFF", "logos/default.png")
-
     if team in themes:
         return themes[team]
-
     key = team.strip()
     if key in themes:
         return themes[key]
-
     upper_map = {k.upper(): v for k, v in themes.items()}
     v = upper_map.get(key.upper())
     if v:
         return v
-
     compact = re.sub(r"\s+", " ", key)
     v = upper_map.get(compact.upper())
     if v:
         return v
-
     return TeamTheme("#111827", "#FFFFFF", f"logos/{slugify(team)}.png")
 
 
@@ -275,16 +266,9 @@ def _center_container_css() -> None:
           [data-testid="stAppViewContainer"] { background: #FFFFFF; }
           [data-testid="stHeader"] { background: transparent; }
           header { background: transparent !important; }
-          section.main > div { padding-top: 1.25rem; padding-bottom: 5rem; }
+          section.main > div { padding-top: 1.25rem; padding-bottom: 2.0rem; }
           .block-container { max-width: 1200px; }
           div[data-testid="stVerticalBlock"] > div { gap: 0.75rem; }
-          .fixed-bottom {
-            position: fixed; left: 0; right: 0; bottom: 0;
-            background: rgba(255,255,255,0.92); backdrop-filter: blur(10px);
-            padding: 12px 18px; border-top: 1px solid rgba(0,0,0,0.08);
-            z-index: 9998;
-          }
-          .fixed-bottom-inner { max-width: 1200px; margin: 0 auto; }
         </style>
         """,
         unsafe_allow_html=True,
@@ -343,64 +327,6 @@ def _render_header(
     )
 
 
-def _is_shot_like(ev: Dict[str, Any]) -> bool:
-    if ev.get("shotTypeId") is not None or ev.get("shotTypeName") is not None:
-        return True
-    rn = str(ev.get("resultName") or "").strip().lower()
-    if rn in {"shot", "goal", "own goal"}:
-        return True
-    labels = ev.get("labels")
-    if isinstance(labels, list):
-        s = " ".join(str(x) for x in labels).lower()
-        if "shot" in s or "goal" in s:
-            return True
-    return False
-
-
-def _corner_side_left_right(ev: Dict[str, Any]) -> Optional[str]:
-    """
-    Best-effort fallback when OA's shot parsing yields 0.
-    For corner events, startPosYM tends to be near one sideline; split by midline.
-    """
-    y = ev.get("startPosYM")
-    try:
-        yv = float(y)
-    except Exception:
-        return None
-    return "left" if yv < 34.0 else "right"
-
-
-def _fallback_attacking_shots(json_data_view: dict, selected_team: str) -> Dict[str, Tuple[int, int, float]]:
-    team_raw = (selected_team or "").strip()
-    team_canon = oa.get_canonical_team(team_raw) or team_raw
-
-    tot = {"left": 0, "right": 0}
-    shots = {"left": 0, "right": 0}
-
-    for m in (json_data_view.get("matches", []) or []):
-        for ev in (m.get("corner_events", []) or []):
-            tn_raw = str(ev.get("teamName") or "").strip()
-            tn_canon = oa.get_canonical_team(tn_raw) or tn_raw
-            if tn_canon != team_canon:
-                continue
-
-            side = _corner_side_left_right(ev)
-            if side is None:
-                continue
-
-            tot[side] += 1
-            if _is_shot_like(ev):
-                shots[side] += 1
-
-    out: Dict[str, Tuple[int, int, float]] = {}
-    for side in ("left", "right"):
-        t = tot[side]
-        s = shots[side]
-        pct = (s / t * 100.0) if t > 0 else 0.0
-        out[side] = (t, s, pct)
-    return out
-
-
 def _generate_filled_pptx(
     *,
     json_data_full: dict,
@@ -438,22 +364,10 @@ def _generate_filled_pptx(
     league_stats = cached["league_stats"]
     viz_config = cached["viz_config"]
 
-    # --- Fix "0/X shots" issue: OA sometimes returns 0 shots for women datasets.
-    # If totals > 0 but shots are 0 on both sides, fall back to shot detection via shotTypeId/resultName/labels.
-    try:
-        tot_L, shot_L, _pct_L = results["attacking_shots"]["left"]
-        tot_R, shot_R, _pct_R = results["attacking_shots"]["right"]
-        if (tot_L + tot_R) > 0 and (shot_L + shot_R) == 0:
-            fallback = _fallback_attacking_shots(json_data_view, selected_team)
-            results["attacking_shots"]["left"] = fallback["left"]
-            results["attacking_shots"]["right"] = fallback["right"]
-    except Exception:
-        pass
-
     theme = _theme_for_team(themes, selected_team)
     set_matplotlib_bg("#FFFFFF")
 
-    # Slide 1
+    # Slide 1 plots
     fig_att_L = oa.plot_percent_attacking(
         get_img_path("att_L"),
         viz_config["att_L"],
@@ -493,7 +407,7 @@ def _generate_filled_pptx(
         font_size=16,
     )
 
-    # Slide 2
+    # Slide 2 plots
     (tot_dL, ids_dL, pcts_dL) = results["defensive"]["left"]
     fig_def_L = oa.plot_shots_defensive(get_img_path("def_L"), viz_config["def_L"], pcts_dL, tot_dL, ids_dL)
 
@@ -507,7 +421,6 @@ def _generate_filled_pptx(
         headers_df = load_headers(HEADERS_CSV, st.session_state.dataset_id)
         seq_df = load_events_sequences(EVENTS_SEQ_CSV, st.session_state.dataset_id)
         headers_df = oa.attach_actual_club_from_events(headers_df, seq_df)
-
         team_c = oa._canon_team(selected_team) or selected_team
         df_team = headers_df[headers_df["club_actual_canon"] == team_c].copy()
         if not df_team.empty:
@@ -515,39 +428,33 @@ def _generate_filled_pptx(
             fig_def_headers = oa.plot_defending_corner_players_diverging(df_team, max_players=15)
 
     images_by_shape_name = {
-        0: {  # Slide 1
+        0: {
             "PH_Corners_left_positions_vis": fig_to_png_bytes(fig_att_L),
             "PH_Corners_right_positions_vis": fig_to_png_bytes(fig_att_R),
             "PH_Corners_left_shots_vis": fig_to_png_bytes(fig_att_shots_L),
             "PH_Corners_right_shots_vis": fig_to_png_bytes(fig_att_shots_R),
+        },
+        1: {
             "PH_def_left": fig_to_png_bytes(fig_def_L),
             "PH_def_right": fig_to_png_bytes(fig_def_R),
-
         },
     }
 
     images_by_token = {
-        # headers
         "{att_corners_headers}": [fig_to_png_bytes_labels(fig_att_headers)] if fig_att_headers is not None else [],
         "{def_corners_headers}": [fig_to_png_bytes_labels(fig_def_headers)] if fig_def_headers is not None else [],
-    
-        # attacking shots visuals (now token-driven so it can be on any slide)
+        # If you moved these to tokens, keep them here too (safe no-op if not in template)
         "{Corners_left_shots_vis}": [fig_to_png_bytes(fig_att_shots_L)],
         "{Corners_right_shots_vis}": [fig_to_png_bytes(fig_att_shots_R)],
-    
-        # defensive shots visuals (you moved these to slide 1; token-driven fixes placement)
         "{def_Corner_left_shots_vis}": [fig_to_png_bytes(fig_def_L)],
         "{def_Corner_right_shots_vis}": [fig_to_png_bytes(fig_def_R)],
     }
 
-    # Template tokens (you added {middle_bar}; treat it like {bottom_bar})
     meta = {
         "{TEAM_NAME}": selected_team,
         "{nlc}": str(results.get("own_left_count", 0)),
         "{nrc}": str(results.get("own_right_count", 0)),
         "{MATCHES_ANALYZED}": str(matches_analyzed_total),
-    
-        # Provide both braced and unbraced variants (covers both filler implementations)
         "{bottom_bar}": theme.rest_hex,
         "bottom_bar": theme.rest_hex,
         "{middle_bar}": theme.rest_hex,
@@ -577,7 +484,6 @@ if not os.path.exists(CORNER_EVENTS_CSV):
     st.stop()
 
 json_data_full = load_corner_jsonlike(CORNER_EVENTS_CSV, DATASET_ID)
-
 all_teams = get_team_list_from_teamName(json_data_full, DATASET_ID)
 if not all_teams:
     st.error("❌ No teams found in dataset.")
@@ -585,9 +491,10 @@ if not all_teams:
 
 themes = build_team_themes()
 
-with st.container():
-    st.subheader("Configuration")
-    selected_team = st.selectbox("Select team", all_teams)
+# Main content: header -> configuration -> generate button
+st.subheader("Opponent Analysis - Set Pieces")
+
+selected_team = st.selectbox("Select team", all_teams)
 
 matches_full = json_data_full.get("matches", []) or []
 team_matches_sorted = sorted(
@@ -609,13 +516,6 @@ n_last = st.slider(
 )
 window_label = "All" if n_last >= team_total else f"Last {n_last}"
 
-show_matches_used = st.checkbox("Show matches used", value=False)
-if show_matches_used:
-    team_matches_window = team_matches_sorted[:n_last]
-    df_used = pd.DataFrame([{"match_name": m.get("match_name", "")} for m in team_matches_window])
-    st.write(f"Matches used: {len(df_used)}")
-    st.dataframe(df_used[["match_name"]], use_container_width=True, hide_index=True)
-
 theme = _theme_for_team(themes, selected_team)
 _render_header(
     team=selected_team,
@@ -626,88 +526,7 @@ _render_header(
     matches_analyzed=team_total,
 )
 
-st.divider()
-
-st.subheader("Add data")
-if "uploader_key" not in st.session_state:
-    st.session_state.uploader_key = 0
-
-uploaded_files = st.file_uploader(
-    "Upload SciSports files (JSON or ZIP)",
-    type=["json", "zip"],
-    accept_multiple_files=True,
-    key=f"uploader_{st.session_state.uploader_key}",
-)
-
-run_update = st.button("Update database", type="primary", disabled=not uploaded_files)
-
-if run_update:
-    uploads_root = Path("data/_uploads")
-    uploads_root.mkdir(parents=True, exist_ok=True)
-
-    stamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
-    batch_dir = uploads_root / f"batch_{stamp}"
-    batch_dir.mkdir(parents=True, exist_ok=True)
-
-    n_json = _save_uploads_to_batch(uploaded_files, batch_dir)
-
-    if n_json == 0:
-        st.error("❌ No JSON files found in upload/zip.")
-    else:
-        with st.spinner("Updating database CSVs..."):
-            result = upd.update_database(
-                uploads_dir=batch_dir,
-                data_dir=Path("data"),
-            )
-
-        if result.get("ok"):
-            st.success(
-                "✅ Database updated. "
-                f"events_all Δ{result.get('added_events_all', 0)}, "
-                f"events_full Δ{result.get('added_events_full', 0)}, "
-                f"headers Δ{result.get('headers_net_new_rows', 0)} | "
-                f"GitHub: {result.get('github_push_msg', '')}"
-            )
-
-            try:
-                shutil.rmtree(batch_dir, ignore_errors=True)
-            except Exception:
-                pass
-
-            st.session_state.uploader_key += 1
-            st.session_state.dataset_version += 1
-            st.session_state.analysis_cache = {}
-            st.cache_data.clear()
-            st.rerun()
-        else:
-            st.error(f"❌ Update failed: {result.get('error', 'Unknown error')}")
-            st.write(result)
-
-latest_dt, latest_name = oa.get_latest_match_info(json_data_full)
-st.caption(
-    f"Latest match in dataset: {latest_dt.strftime('%d-%m-%Y')} — {latest_name}"
-    if latest_dt and latest_name
-    else "Latest match in dataset: -"
-)
-
-# Bottom fixed button
-st.markdown(
-    """
-    <div class="fixed-bottom">
-      <div class="fixed-bottom-inner">
-    """,
-    unsafe_allow_html=True,
-)
-
-generate = st.button("Generate corner analysis", type="primary", use_container_width=True)
-
-st.markdown(
-    """
-      </div>
-    </div>
-    """,
-    unsafe_allow_html=True,
-)
+generate = st.button("Generate corner analysis", type="primary", width="stretch")
 
 if generate:
     if not os.path.exists(TEMPLATE_PPTX):
@@ -729,5 +548,70 @@ if generate:
         data=pptx_bytes,
         file_name=fname,
         mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
-        use_container_width=True,
+        width="stretch",
     )
+
+# Sidebar: Add data
+with st.sidebar:
+    st.header("Add data")
+
+    if "uploader_key" not in st.session_state:
+        st.session_state.uploader_key = 0
+
+    uploaded_files = st.file_uploader(
+        "Upload SciSports files (JSON or ZIP)",
+        type=["json", "zip"],
+        accept_multiple_files=True,
+        key=f"uploader_{st.session_state.uploader_key}",
+    )
+
+    run_update = st.button("Update database", type="primary", disabled=not uploaded_files, width="stretch")
+
+    if run_update:
+        uploads_root = Path("data/_uploads")
+        uploads_root.mkdir(parents=True, exist_ok=True)
+
+        stamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+        batch_dir = uploads_root / f"batch_{stamp}"
+        batch_dir.mkdir(parents=True, exist_ok=True)
+
+        n_json = _save_uploads_to_batch(uploaded_files, batch_dir)
+
+        if n_json == 0:
+            st.error("❌ No JSON files found in upload/zip.")
+        else:
+            with st.spinner("Updating database CSVs..."):
+                result = upd.update_database(
+                    uploads_dir=batch_dir,
+                    data_dir=Path("data"),
+                )
+
+            if result.get("ok"):
+                st.success(
+                    "✅ Database updated. "
+                    f"events_all Δ{result.get('added_events_all', 0)}, "
+                    f"events_full Δ{result.get('added_events_full', 0)}, "
+                    f"headers Δ{result.get('headers_net_new_rows', 0)} | "
+                    f"GitHub: {result.get('github_push_msg', '')}"
+                )
+
+                try:
+                    shutil.rmtree(batch_dir, ignore_errors=True)
+                except Exception:
+                    pass
+
+                st.session_state.uploader_key += 1
+                st.session_state.dataset_version += 1
+                st.session_state.analysis_cache = {}
+                st.cache_data.clear()
+                st.rerun()
+            else:
+                st.error(f"❌ Update failed: {result.get('error', 'Unknown error')}")
+                st.write(result)
+
+latest_dt, latest_name = oa.get_latest_match_info(json_data_full)
+st.caption(
+    f"Latest match in dataset: {latest_dt.strftime('%d-%m-%Y')} — {latest_name}"
+    if latest_dt and latest_name
+    else "Latest match in dataset: -"
+)

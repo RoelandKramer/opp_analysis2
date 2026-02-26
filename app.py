@@ -162,8 +162,107 @@ def get_team_list_from_teamName(json_data_full: dict) -> List[str]:
     return sorted(teams)
 
 
+def _match_dt(match: dict) -> datetime:
+    dt = match.get("match_date")
+    return dt if isinstance(dt, datetime) else datetime.min
+
+
+# ---------------- DEBUG HELPERS ----------------
+def _debug_panel(json_data_full: dict, selected_team: str) -> None:
+    with st.expander("🛠 Debug: team/match detection", expanded=True):
+        matches_full = json_data_full.get("matches", []) or []
+        st.write("DATA_ROOT:", str(DATA_ROOT.resolve()))
+        st.write("CORNER_EVENTS_CSV:", CORNER_EVENTS_CSV)
+        st.write("matches_full:", len(matches_full))
+
+        if not matches_full:
+            st.error("No matches found in json_data_full['matches']. Your loader may be returning an empty dataset.")
+            st.stop()
+
+        sample_match = matches_full[0]
+        st.write("sample_match keys:", sorted(sample_match.keys()))
+        st.write("sample_match.match_name:", sample_match.get("match_name"))
+        st.write("sample_match.match_date type:", type(sample_match.get("match_date")).__name__)
+        events = sample_match.get("corner_events", []) or []
+        st.write("sample_match.corner_events:", len(events))
+        if events:
+            st.write("sample event keys:", sorted(events[0].keys()))
+            st.write("sample teamName values (first 10):", [ev.get("teamName") for ev in events[:10]])
+            st.write(
+                "sample canonical teamName values (first 10):",
+                [oa.get_canonical_team(ev.get("teamName")) for ev in events[:10]],
+            )
+        else:
+            st.warning("sample_match has 0 corner_events. Check your CSV content / parsing logic.")
+
+        # Show raw teams (as in events) vs canonical teams
+        raw_teams = get_team_list_from_teamName(json_data_full)
+        st.write("unique raw teams (count):", len(raw_teams))
+        st.write("first 30 raw teams:", raw_teams[:30])
+
+        canon_teams = sorted(
+            {
+                (oa.get_canonical_team(t) or str(t).strip())
+                for t in raw_teams
+                if str(t).strip()
+            }
+        )
+        st.write("unique canonical teams (count):", len(canon_teams))
+        st.write("first 30 canonical teams:", canon_teams[:30])
+
+        # Why no matches? Compare selected_team vs canonical logic
+        sel_raw = (selected_team or "").strip()
+        sel_canon = oa.get_canonical_team(sel_raw) or sel_raw
+        st.write("selected_team (raw):", sel_raw)
+        st.write("selected_team (canonical):", sel_canon)
+
+        # Compute match counts by three strategies
+        def has_team_raw(match: dict) -> bool:
+            for ev in (match.get("corner_events", []) or []):
+                if str(ev.get("teamName") or "").strip() == sel_raw:
+                    return True
+            return False
+
+        def has_team_canon(match: dict) -> bool:
+            for ev in (match.get("corner_events", []) or []):
+                if (oa.get_canonical_team(ev.get("teamName")) or "") == sel_canon:
+                    return True
+            return False
+
+        def has_team_canon_using_oa_canon_team(match: dict) -> bool:
+            # Mirrors the original code path using oa.get_canonical_team() on both sides
+            teams_in_match = {
+                oa.get_canonical_team(ev.get("teamName"))
+                for ev in (match.get("corner_events", []) or [])
+                if oa.get_canonical_team(ev.get("teamName"))
+            }
+            return sel_canon in teams_in_match
+
+        raw_hits = sum(1 for m in matches_full if has_team_raw(m))
+        canon_hits = sum(1 for m in matches_full if has_team_canon(m))
+        canon_set_hits = sum(1 for m in matches_full if has_team_canon_using_oa_canon_team(m))
+
+        st.write("matches containing teamName == selected (raw compare):", raw_hits)
+        st.write("matches containing canonical(teamName) == canonical(selected):", canon_hits)
+        st.write("matches containing canonical set contains canonical(selected):", canon_set_hits)
+
+        if raw_hits == 0 and canon_hits == 0:
+            st.error(
+                "No matches found by either raw or canonical matching. "
+                "This usually means teamName values are not where we expect (or corner_events is empty)."
+            )
+
+        # Show a couple matches where we DO find any teamName, for sanity
+        nonempty_matches = [m for m in matches_full if (m.get("corner_events", []) or [])]
+        st.write("matches with >=1 corner_event:", len(nonempty_matches))
+        if nonempty_matches:
+            m0 = nonempty_matches[0]
+            st.write("example nonempty match_name:", m0.get("match_name"))
+            st.write("example nonempty first 10 teamName:", [ev.get("teamName") for ev in (m0.get("corner_events", []) or [])[:10]])
+
+
 def _match_has_team(match: dict, team_name: str) -> bool:
-    # Keep men's canonicalization logic, but DO NOT rename the displayed team.
+    # Keep men's canonicalization logic (do not remove)
     team_canon = oa.get_canonical_team(team_name) or team_name
 
     events = match.get("corner_events", []) or []
@@ -176,11 +275,6 @@ def _match_has_team(match: dict, team_name: str) -> bool:
         if oa.get_canonical_team(ev.get("teamName"))
     }
     return team_canon in teams_in_match
-
-
-def _match_dt(match: dict) -> datetime:
-    dt = match.get("match_date")
-    return dt if isinstance(dt, datetime) else datetime.min
 
 
 def _save_uploads_to_batch(uploaded_files, batch_dir: Path) -> int:
@@ -231,14 +325,7 @@ def _center_container_css() -> None:
     )
 
 
-def _render_header(
-    team: str,
-    primary_hex: str,
-    secondary_hex: str,
-    logo_path: str,
-    window_label: str,
-    matches_analyzed: Optional[int],
-) -> None:
+def _render_header(team: str, primary_hex: str, secondary_hex: str, logo_path: str, window_label: str, matches_analyzed: Optional[int]) -> None:
     logo_b64 = None
     if logo_path and os.path.exists(logo_path):
         with open(logo_path, "rb") as f:
@@ -321,7 +408,6 @@ def _generate_filled_pptx(
     theme = themes.get(selected_team) or TeamTheme("#111827", "#FFFFFF", f"logos/{slugify(selected_team)}.png")
     set_matplotlib_bg("#FFFFFF")
 
-    # Slide 1
     fig_att_L = oa.plot_percent_attacking(
         get_img_path("att_L"),
         viz_config["att_L"],
@@ -361,7 +447,6 @@ def _generate_filled_pptx(
         font_size=16,
     )
 
-    # Slide 2
     (tot_dL, ids_dL, pcts_dL) = results["defensive"]["left"]
     fig_def_L = oa.plot_shots_defensive(get_img_path("def_L"), viz_config["def_L"], pcts_dL, tot_dL, ids_dL)
 
@@ -382,13 +467,13 @@ def _generate_filled_pptx(
             fig_def_headers = oa.plot_defending_corner_players_diverging(df_team, max_players=15)
 
     images_by_shape_name = {
-        0: {  # Slide 1
+        0: {
             "PH_Corners_left_positions_vis": fig_to_png_bytes(fig_att_L),
             "PH_Corners_right_positions_vis": fig_to_png_bytes(fig_att_R),
             "PH_Corners_left_shots_vis": fig_to_png_bytes(fig_att_shots_L),
             "PH_Corners_right_shots_vis": fig_to_png_bytes(fig_att_shots_R),
         },
-        1: {  # Slide 2
+        1: {
             "PH_def_left": fig_to_png_bytes(fig_def_L),
             "PH_def_right": fig_to_png_bytes(fig_def_R),
         },
@@ -429,7 +514,6 @@ if not os.path.exists(CORNER_EVENTS_CSV):
 
 json_data_full = load_corner_jsonlike(CORNER_EVENTS_CSV)
 
-# ✅ Dropdown must be all unique values from "teamName" in events_all_matches.csv (loaded jsonlike)
 all_teams = get_team_list_from_teamName(json_data_full)
 if not all_teams:
     st.error("❌ No teams found in dataset.")
@@ -437,10 +521,12 @@ if not all_teams:
 
 themes = build_team_themes()
 
-# Center controls (same order as old sidebar)
 with st.container():
     st.subheader("Configuration")
     selected_team = st.selectbox("Select team", all_teams)
+
+# ✅ ALWAYS render debug panel to diagnose "No matches found"
+_debug_panel(json_data_full, selected_team)
 
 matches_full = json_data_full.get("matches", []) or []
 team_matches_sorted = sorted(
@@ -537,7 +623,6 @@ st.caption(
     else "Latest match in dataset: -"
 )
 
-# Header banner (preview)
 theme = themes.get(selected_team) or TeamTheme("#111827", "#FFFFFF", f"logos/{slugify(selected_team)}.png")
 _render_header(
     team=selected_team,
@@ -548,7 +633,6 @@ _render_header(
     matches_analyzed=None,
 )
 
-# Bottom fixed button (only button that generates analysis)
 st.markdown(
     """
     <div class="fixed-bottom">

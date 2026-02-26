@@ -37,21 +37,31 @@ class CropSpec:
     bottom: float = 0.0
 
 CROP_BY_SHAPE_NAME: Dict[str, CropSpec] = {
-    # Att Right (positions)
+    # ------------------
+    # TOP positions plots: crop top+bottom so height 1.52 -> 1.45
+    # total vertical crop = 0.04605, split evenly:
+    # top=0.0230, bottom=0.0230
+    # ------------------
+    "PH_Corners_left_positions_vis": CropSpec(
+        left=0.0104,
+        top=0.0230,
+        bottom=0.0230,
+    ),
     "PH_Corners_right_positions_vis": CropSpec(
         left=0.0104,
         right=0.0700,
-        top=0.0987,
-        bottom=0.2763,
+        top=0.0230,
+        bottom=0.0230,
     ),
 
-    # Att Left (positions) - apply same LEFT crop
-    # Keep your existing top crop if you already have it elsewhere;
-    # if you want it here too, add top=...
-    "PH_Corners_left_positions_vis": CropSpec(
-        left=0.0104,
-        top=0.15,  # optional: put your existing top crop here if you want to centralize it
-    ),
+    # ------------------
+    # Shots + defensive plots: crop bottom so height 1.75 -> 1.31
+    # bottom crop = 0.2514
+    # ------------------
+    "PH_Corners_left_shots_vis": CropSpec(bottom=0.2514),
+    "PH_Corners_right_shots_vis": CropSpec(bottom=0.2514),
+    "PH_def_left": CropSpec(bottom=0.2514),
+    "PH_def_right": CropSpec(bottom=0.2514),
 }
 
 # ============================================================

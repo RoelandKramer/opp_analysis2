@@ -20,16 +20,14 @@ import numpy as np
 import pandas as pd
 from matplotlib.patches import Polygon
 
-
-# ============================================================
-# 0) UTILITIES
-# ============================================================
-
 _MATCH_ID_FROM_NAME = re.compile(r"-\s*(\d+)\s*(?:\(\d+\))?\s*$", re.IGNORECASE)
 _DATE_YYYYMMDD = re.compile(r"^(?P<d>\d{8})\s+")
 _DATE_DDMMYYYY = re.compile(r"^(?P<d>\d{2}-\d{2}-\d{4})")
 
 HEADER_BODY_PART_NAMES = {"HEAD"}
+
+ShotMap = Dict[Tuple[str, str], bool]  # (match_id, sequenceId) -> has_shot
+
 
 def truthy(x: Any) -> bool:
     if x is True:
@@ -40,9 +38,10 @@ def truthy(x: Any) -> bool:
         return True
     return False
 
+
 def _is_true_corner_start(ev: Dict[str, Any]) -> bool:
-    # IMPORTANT: sequenceStart can be 'TRUE'/'FALSE' strings in CSV-derived dicts
     return ev.get("possessionTypeName") == "CORNER" and truthy(ev.get("sequenceStart"))
+
 
 def _safe_int(x: Any, default: int = -1) -> int:
     try:
@@ -50,85 +49,12 @@ def _safe_int(x: Any, default: int = -1) -> int:
     except Exception:
         return default
 
-def filter_last_n_matches(json_data: Dict[str, Any], n_last: Optional[int]) -> Dict[str, Any]:
-    """
-    Return json_data with only the last n_last matches (by match_date).
-    If n_last is None or >= number of dated matches -> returns original json_data.
-    Matches without a date are kept at the end (older).
-    """
-    matches = list(json_data.get("matches", []) or [])
-    if not matches:
-        return {"matches": []}
 
-    def _dt(m):
-        dt = m.get("match_date")
-        return dt if isinstance(dt, datetime) else None
-
-    dated = [m for m in matches if _dt(m) is not None]
-    undated = [m for m in matches if _dt(m) is None]
-
-    dated.sort(key=lambda m: _dt(m))  # oldest -> newest
-
-    ordered = dated + undated  # undated treated as oldest-ish
-    if not n_last or n_last >= len(ordered):
-        return {"matches": ordered}
-
-    return {"matches": ordered[-int(n_last):]}
-
-def filter_last_n_matches_for_team(
-    json_data: Dict[str, Any],
-    selected_team_name: str,
-    n_last: Optional[int],
-) -> Dict[str, Any]:
-    """
-    Keep only matches where selected_team_name appears (based on teamName in corner_events),
-    then take the last n_last matches by match_date (undated go last/older).
-    If n_last is None or >= available -> keep all team matches.
-    """
-    matches = list(json_data.get("matches", []) or [])
-    if not matches:
-        return {"matches": []}
-
-    # 1) keep only matches where team appears
-    team_matches: List[Dict[str, Any]] = []
-    for m in matches:
-        events = m.get("corner_events", []) or []
-        match_teams = set()
-        for ev in events:
-            c = get_canonical_team(ev.get("teamName"))
-            if c:
-                match_teams.add(c)
-        if selected_team_name in match_teams:
-            team_matches.append(m)
-
-    if not team_matches:
-        return {"matches": []}
-
-    # 2) order by match_date (oldest -> newest), undated treated as oldest
-    def _dt(mm):
-        dt = mm.get("match_date")
-        return dt if isinstance(dt, datetime) else None
-
-    dated = [m for m in team_matches if _dt(m) is not None]
-    undated = [m for m in team_matches if _dt(m) is None]
-    dated.sort(key=lambda m: _dt(m))
-    ordered = dated + undated
-
-    # 3) slice last N
-    if not n_last or n_last >= len(ordered):
-        return {"matches": ordered}
-    return {"matches": ordered[-int(n_last):]}
-    
-
-
-def _safe_float(x: Any) -> Optional[float]:
-    try:
-        v = float(x)
-        if v != v:
-            return None
-        return v
-    except Exception:
+def _norm_seq_id(x: Any) -> Optional[str]:
+    if x is None:
         return None
+    s = str(x).strip()
+    return s if s else None
 
 
 def _safe_abs_float(x: Any) -> Optional[float]:
@@ -190,10 +116,6 @@ def _load_bg(file_obj_or_path: Optional[str]):
     return np.ones((800, 1400, 3))
 
 
-# ============================================================
-# 1) TEAM NORMALIZATION
-# ============================================================
-
 TEAM_NAME_MAPPING: Dict[str, Optional[str]] = {
     "ADO Den Haag": "ADO Den Haag",
     "Almere City FC": "Almere City FC",
@@ -215,21 +137,19 @@ TEAM_NAME_MAPPING: Dict[str, Optional[str]] = {
     "VVV-Venlo": "VVV-Venlo",
     "Vitesse": "Vitesse",
     "Willem II": "Willem II",
-    "FC Twente W" : "FC Twente W",
-    "ADO Den Haag W" : "ADO Den Haag W",
-    "AZ W" : "AZ W",
-    "Ajax W" : "Ajax W",
-    "Excelsior Rotterdam W" : "Excelsior Rotterdam W",
-    "Feyenoord W" : "Feyenoord W",
-    "Hera United W" : "Hera United W",
-    "NAC Breda W" : "NAC Breda W",
-    "PEC ZWOLLE W" : "PEC Zwolle W",
+    "FC Twente W": "FC Twente W",
+    "ADO Den Haag W": "ADO Den Haag W",
+    "AZ W": "AZ W",
+    "Ajax W": "Ajax W",
+    "Excelsior Rotterdam W": "Excelsior Rotterdam W",
+    "Feyenoord W": "Feyenoord W",
+    "Hera United W": "Hera United W",
+    "NAC Breda W": "NAC Breda W",
+    "PEC ZWOLLE W": "PEC Zwolle W",
+    "PEC Zwolle W": "PEC Zwolle W",
     "PSV W": "PSV W",
     "SC Heerenveen W": "SC Heerenveen W",
-    "Utrecht W" : "Utrecht W",
-    
-    
-    # aliases
+    "Utrecht W": "Utrecht W",
     "Almere City": "Almere City FC",
     "Den Bosch": "FC Den Bosch",
     "Dordrecht": "FC Dordrecht",
@@ -258,92 +178,8 @@ def _canon_team(name: Any) -> Optional[str]:
         return None
     return TEAM_NAME_MAPPING.get(s, s)
 
-def debug_used_matches(json_data: Dict[str, Any], selected_team_name: str) -> pd.DataFrame:
-    """
-    Debug why matches are (not) counted in process_corner_data for a team.
-    Returns one row per match with counts and the first "reason" it would be skipped.
-    """
-    rows: List[Dict[str, Any]] = []
-
-    for match in json_data.get("matches", []) or []:
-        mid = str(match.get("match_id", ""))
-        mname = match.get("match_name")
-        events = match.get("corner_events", []) or []
-
-        if not events:
-            rows.append({
-                "match_id": mid,
-                "match_name": mname,
-                "events": 0,
-                "teams_in_match": 0,
-                "team_present": False,
-                "corner_starts_found": 0,
-                "reason": "no_events",
-            })
-            continue
-
-        # teams found in match
-        match_teams = set()
-        for ev in events:
-            c = get_canonical_team(ev.get("teamName"))
-            if c:
-                match_teams.add(c)
-
-        team_present = selected_team_name in match_teams
-        if not team_present:
-            rows.append({
-                "match_id": mid,
-                "match_name": mname,
-                "events": len(events),
-                "teams_in_match": len(match_teams),
-                "team_present": False,
-                "corner_starts_found": 0,
-                "reason": "team_not_in_match_teams",
-            })
-            continue
-
-        # count "true corner starts" as your process_corner_data would
-        corner_starts = 0
-        corner_starts_truthy = 0
-
-        for e in events:
-            # useful to see if sequenceStart formatting is the problem
-            if e.get("possessionTypeName") == "CORNER":
-                corner_starts += 1
-                if _is_true_corner_start(e):
-                    corner_starts_truthy += 1
-
-        reason = "ok"
-        if corner_starts_truthy == 0:
-            reason = "no_true_corner_starts"
-
-        rows.append({
-            "match_id": mid,
-            "match_name": mname,
-            "events": len(events),
-            "teams_in_match": len(match_teams),
-            "team_present": True,
-            "corner_events_found": corner_starts,
-            "corner_starts_found": corner_starts_truthy,
-            "example_sequenceStart_values": ",".join(
-                sorted({str(e.get("sequenceStart")) for e in events if e.get("possessionTypeName") == "CORNER"}))[:200]
-            ,
-            "reason": reason,
-        })
-
-    return pd.DataFrame(rows)
-
-
-# ============================================================
-# 2) CSV LOADERS (json-like wrapper)
-# ============================================================
 
 def load_corner_events_csv_as_jsonlike(corner_events_csv_path: str) -> Dict[str, Any]:
-    """
-    Loads corner_events_all_matches.csv and returns:
-      {"matches":[{"match_id","match_name","match_date","pitch_top_x","pitch_left_y","corner_events":[...]},...]}
-    Groups by match_id only.
-    """
     if not os.path.exists(corner_events_csv_path):
         raise FileNotFoundError(f"Corner events CSV not found: {corner_events_csv_path}")
 
@@ -409,81 +245,6 @@ def get_latest_match_info(json_data: Dict[str, Any]) -> Tuple[Optional[datetime]
             latest_name = m.get("match_name")
     return latest_dt, latest_name
 
-
-def extract_all_teams(json_data: Dict[str, Any]) -> List[str]:
-    teams: set[str] = set()
-    for m in json_data.get("matches", []):
-        for ev in m.get("corner_events", []) or []:
-            t = get_canonical_team(ev.get("teamName"))
-            if t:
-                teams.add(t)
-    return sorted(teams)
-def attach_actual_club_from_events(
-    headers_df: pd.DataFrame,
-    events_seq_df: pd.DataFrame,
-) -> pd.DataFrame:
-    """
-    headers_df has club = HOME/AWAY. This function attaches:
-      - club_actual (real team name)
-      - club_actual_canon (canonical team name)
-    so you can filter by selected team.
-    """
-    if headers_df is None or headers_df.empty:
-        return headers_df
-
-    if events_seq_df is None or events_seq_df.empty:
-        return headers_df
-
-    ev = events_seq_df.copy()
-
-    # Ensure we have match_id to join on
-    if "match_id" not in ev.columns:
-        if "source_event_file" in ev.columns:
-            ev["match_id"] = ev["source_event_file"].apply(_match_id_from_path)
-        else:
-            return headers_df
-
-    if "groupName" not in ev.columns or "teamName" not in ev.columns:
-        return headers_df
-
-    # Normalize groupName -> HOME/AWAY
-    def _norm_group(x: Any) -> Optional[str]:
-        if not isinstance(x, str):
-            return None
-        s = x.strip().upper()
-        if s in {"HOME", "H"}:
-            return "HOME"
-        if s in {"AWAY", "A"}:
-            return "AWAY"
-        return None
-
-    ev["__group"] = ev["groupName"].apply(_norm_group)
-    ev = ev.dropna(subset=["match_id", "__group", "teamName"]).copy()
-
-    # Build match_id -> {HOME: teamName, AWAY: teamName}
-    # If multiple rows exist, we take the most common teamName per group in that match
-    map_rows = (
-        ev.groupby(["match_id", "__group"])["teamName"]
-        .agg(lambda s: s.value_counts().index[0])
-        .reset_index()
-        .rename(columns={"__group": "club", "teamName": "club_actual"})
-    )
-
-    out = headers_df.copy()
-    if "match_id" not in out.columns or "club" not in out.columns:
-        return out
-
-    out["match_id"] = out["match_id"].astype(str)
-    map_rows["match_id"] = map_rows["match_id"].astype(str)
-
-    out = out.merge(map_rows, on=["match_id", "club"], how="left")
-    out["club_actual_canon"] = out["club_actual"].apply(_canon_team)
-    return out
-
-
-# ============================================================
-# 3) FIELD + ZONES + SEQUENCE HELPERS (visualizations)
-# ============================================================
 
 def _iter_numbers(x: Any) -> Iterable[float]:
     if isinstance(x, (int, float)) and math.isfinite(float(x)):
@@ -586,33 +347,27 @@ def _assign_zone(ex: float, ey: float, zones: Dict[str, List[Tuple[float, float]
         if point_in_rect(ex, ey, r):
             return n
     return None
-    
+
+
 def _sequence_has_shot(seq: List[Dict[str, Any]]) -> bool:
     for ev in seq or []:
         bt = str(ev.get("baseTypeName") or "").strip().upper()
         if bt == "SHOT":
             return True
-
         if _safe_int(ev.get("baseTypeId"), -1) == 6:
             return True
-
-        # Women feed often includes these even when baseTypeName differs
         if ev.get("shotTypeId") is not None or str(ev.get("shotTypeName") or "").strip():
             return True
-
         rn = str(ev.get("resultName") or "").strip().upper()
         if "SHOT" in rn or "GOAL" in rn:
             return True
-        if rn in {"WIDE", "ON_TARGET", "OFF_TARGET", "SAVED", "BLOCKED", "GOAL"}:
-            return True
-
         labels = ev.get("labels")
         if isinstance(labels, list):
             s = " ".join(str(x) for x in labels).upper()
             if "SHOT" in s or "GOAL" in s:
                 return True
-
     return False
+
 
 def _valid_zone_for_shot_lists(zone_val: Any) -> bool:
     return bool(zone_val and str(zone_val).strip() and zone_val != "Short_Corner_Zone")
@@ -621,10 +376,6 @@ def _valid_zone_for_shot_lists(zone_val: Any) -> bool:
 def _valid_zone_for_attacking_shots(zone_val: Any) -> bool:
     return bool(zone_val and str(zone_val).strip() and zone_val != "Unassigned")
 
-
-# ============================================================
-# 4) ATT/DEF PROCESSING + TABLES (corner takers)
-# ============================================================
 
 def _extract_jersey_number(ev: Dict[str, Any]) -> Optional[int]:
     candidates = (
@@ -737,20 +488,27 @@ def _calc_attacking_shot_stats(corners: List[Dict[str, Any]]):
     return total_by_zone, shot_by_zone, pct_by_zone
 
 
-def process_corner_data(json_data: Dict[str, Any], selected_team_name: str) -> Dict[str, Any]:
+def process_corner_data(
+    json_data: Dict[str, Any],
+    selected_team_name: str,
+    *,
+    shot_map: Optional[ShotMap] = None,
+) -> Dict[str, Any]:
     matches = json_data.get("matches", [])
-    opponent_left_side, opponent_right_side = [], []
-    own_left_side, own_right_side = [], []
-    opponent_seq_with_shot: List[List[Dict[str, Any]]] = []
+    opponent_left_side: List[Dict[str, Any]] = []
+    opponent_right_side: List[Dict[str, Any]] = []
+    own_left_side: List[Dict[str, Any]] = []
+    own_right_side: List[Dict[str, Any]] = []
     used_match_rows: List[Dict[str, Any]] = []
 
     used_matches = 0
-    _seen_seq_keys = set()
 
     for match in matches:
-        events = match.get("corner_events", [])
+        events = match.get("corner_events", []) or []
         if not events:
             continue
+
+        match_id = str(match.get("match_id", "") or "")
 
         match_teams = set()
         for ev in events:
@@ -760,22 +518,25 @@ def process_corner_data(json_data: Dict[str, Any], selected_team_name: str) -> D
 
         if selected_team_name not in match_teams:
             continue
-        used_match_rows.append({
+
+        used_match_rows.append(
+            {
                 "match_id": match.get("match_id"),
                 "match_name": match.get("match_name"),
                 "match_date": match.get("match_date"),
-            })
+            }
+        )
         used_matches += 1
+
         TOP_X, BOTTOM_X, LEFT_Y, RIGHT_Y = _resolve_pitch_bounds(match, events)
         zones_TL, zones_BR, zones_TR, zones_BL = build_zones(TOP_X, BOTTOM_X, LEFT_Y, RIGHT_Y)
-        sequences_by_id = defaultdict(list)
 
+        sequences_by_id = defaultdict(list)
         for ev in events:
-            sid = ev.get("sequenceId")
-            if sid is None:
-                continue
-            sequences_by_id[str(sid)].append(ev)
-            
+            sid = _norm_seq_id(ev.get("sequenceId"))
+            if sid is not None:
+                sequences_by_id[sid].append(ev)
+
         for e in events:
             if not _is_true_corner_start(e):
                 continue
@@ -798,44 +559,40 @@ def process_corner_data(json_data: Dict[str, Any], selected_team_name: str) -> D
 
             zone_end = _assign_zone(float(ex), float(ey), local_zones) or _assign_zone(-float(ex), -float(ey), local_zones)
             e["zone"], e["corner_side"] = zone_end, e_side
-        
-            seq_id = e.get("sequenceId")
-            seq_events = sequences_by_id.get(str(seq_id), []) if seq_id is not None else []
-            seq_has_shot = _sequence_has_shot(seq_events) if seq_events else _sequence_has_shot([e])
-            # DEBUG (remove after): detect seqId mismatch
-            if seq_id is not None and not seq_events:
-                print("WARN: seq_id missing in sequences_by_id:", seq_id, "available example keys:", list(sequences_by_id.keys())[:5])
-                
+
+            seq_id = _norm_seq_id(e.get("sequenceId"))
+
+            if shot_map is not None and match_id and seq_id:
+                seq_has_shot = bool(shot_map.get((match_id, seq_id), False))
+            else:
+                seq_events = sequences_by_id.get(seq_id, []) if seq_id is not None else []
+                seq_has_shot = _sequence_has_shot(seq_events) if seq_events else _sequence_has_shot([e])
+
+            e["seq_has_shot"] = bool(seq_has_shot)
+
             if e_side == "left":
                 (own_left_side if is_own else opponent_left_side).append(e)
             else:
                 (own_right_side if is_own else opponent_right_side).append(e)
 
-            if seq_id is not None:
-                seq_evs = sequences_by_id.get(seq_id, [])
-                if not seq_evs:
-                    continue
-                key = (match.get("match_id"), seq_id, is_own)
-                if key not in _seen_seq_keys:
-                    _seen_seq_keys.add(key)
-                    for sev in seq_evs:
-                        sev["zone"], sev["corner_side"] = zone_end, e_side
-
-                    if (not is_own) and seq_has_shot and _valid_zone_for_shot_lists(zone_end):
-                        opponent_seq_with_shot.append(seq_evs)
-
-    def _calc_defensive_stats(opp_corners: List[Dict[str, Any]], opp_shot_seqs: List[List[Dict[str, Any]]], side_filter: str):
+    def _calc_defensive_stats(opp_corners: List[Dict[str, Any]], side_filter: str):
         total_zone = Counter([c["zone"] for c in opp_corners if _valid_zone_for_shot_lists(c.get("zone"))])
         shot_seq_ids = defaultdict(set)
-        for seq in opp_shot_seqs:
-            start = next((x for x in seq if truthy(x.get("sequenceStart"))), seq[0])
-            if start.get("corner_side") == side_filter:
-                shot_seq_ids[start.get("zone")].add(start.get("sequenceId"))
+
+        for c in opp_corners:
+            if c.get("corner_side") != side_filter:
+                continue
+            zone = c.get("zone")
+            if not _valid_zone_for_shot_lists(zone):
+                continue
+            if c.get("seq_has_shot") is True:
+                shot_seq_ids[zone].add(_norm_seq_id(c.get("sequenceId")))
+
         pct = {z: (len(shot_seq_ids[z]) / t) * 100 for z, t in total_zone.items() if t > 0}
         return total_zone, shot_seq_ids, pct
 
-    def_left_tot, def_left_ids, def_left_pct = _calc_defensive_stats(opponent_left_side, opponent_seq_with_shot, "left")
-    def_right_tot, def_right_ids, def_right_pct = _calc_defensive_stats(opponent_right_side, opponent_seq_with_shot, "right")
+    def_left_tot, def_left_ids, def_left_pct = _calc_defensive_stats(opponent_left_side, "left")
+    def_right_tot, def_right_ids, def_right_pct = _calc_defensive_stats(opponent_right_side, "right")
 
     def _zone_pcts(corners: List[Dict[str, Any]]):
         c = Counter(e["zone"] for e in corners if e.get("zone"))
@@ -857,15 +614,14 @@ def process_corner_data(json_data: Dict[str, Any], selected_team_name: str) -> D
         "attacking_shots": {"left": att_shots_left, "right": att_shots_right},
         "tables": taker_tables,
         "used_matches_table": pd.DataFrame(used_match_rows),
-
     }
 
 
-# ============================================================
-# 5) LEAGUE PERCENTILES (visualization)
-# ============================================================
-
-def compute_league_attacking_corner_shot_rates(json_data: Dict[str, Any]) -> Dict[str, Dict[str, Dict[str, Dict[str, float]]]]:
+def compute_league_attacking_corner_shot_rates(
+    json_data: Dict[str, Any],
+    *,
+    shot_map: Optional[ShotMap] = None,
+) -> Dict[str, Dict[str, Dict[str, Dict[str, float]]]]:
     matches = json_data.get("matches", [])
     stats: Dict[str, Dict[str, Dict[str, Dict[str, float]]]] = {}
     seen_corner_keys = set()
@@ -877,19 +633,20 @@ def compute_league_attacking_corner_shot_rates(json_data: Dict[str, Any]) -> Dic
         return stats[team][side][zone]
 
     for match in matches:
-        events = match.get("corner_events", [])
+        events = match.get("corner_events", []) or []
         if not events:
             continue
+
+        match_id = str(match.get("match_id", "") or "")
 
         TOP_X, BOTTOM_X, LEFT_Y, RIGHT_Y = _resolve_pitch_bounds(match, events)
         zones_TL, zones_BR, zones_TR, zones_BL = build_zones(TOP_X, BOTTOM_X, LEFT_Y, RIGHT_Y)
 
         sequences_by_id = defaultdict(list)
         for ev in events:
-            sid = ev.get("sequenceId")
-            if sid is None:
-                continue
-            sequences_by_id[str(sid)].append(ev)
+            sid = _norm_seq_id(ev.get("sequenceId"))
+            if sid is not None:
+                sequences_by_id[sid].append(ev)
 
         for e in events:
             if not _is_true_corner_start(e):
@@ -916,15 +673,18 @@ def compute_league_attacking_corner_shot_rates(json_data: Dict[str, Any]) -> Dic
             if not _valid_zone_for_attacking_shots(zone_end):
                 continue
 
-            seq_id = e.get("sequenceId")
-            match_id = match.get("match_id")
+            seq_id = _norm_seq_id(e.get("sequenceId"))
             corner_key = (match_id, team, seq_id)
             if corner_key in seen_corner_keys:
                 continue
             seen_corner_keys.add(corner_key)
-            seq_events = sequences_by_id.get(str(seq_id), []) if seq_id is not None else []
 
-            seq_has_shot = _sequence_has_shot(seq_events) if seq_events else _sequence_has_shot([e])
+            if shot_map is not None and match_id and seq_id:
+                seq_has_shot = bool(shot_map.get((match_id, seq_id), False))
+            else:
+                seq_events = sequences_by_id.get(seq_id, []) if seq_id is not None else []
+                seq_has_shot = _sequence_has_shot(seq_events) if seq_events else _sequence_has_shot([e])
+
             bucket = _ensure_bucket(team, side, zone_end)
             bucket["total"] = int(bucket["total"]) + 1
             if seq_has_shot:
@@ -981,10 +741,6 @@ def build_percentiles_for_team(
 
     return percentiles
 
-
-# ============================================================
-# 6) PLOTTING (Streamlit-ready)
-# ============================================================
 
 def plot_shots_defensive(
     img_file: Optional[str],
@@ -1110,10 +866,6 @@ def plot_shots_attacking_with_percentile(
     return fig
 
 
-# ============================================================
-# 7) STATIC COORDS FOR PNG OVERLAYS
-# ============================================================
-
 def get_visualization_coords():
     def_L = {
         "Front_Zone": [(265, 15), (644, 15), (644, 600), (265, 600)],
@@ -1197,531 +949,60 @@ def get_visualization_coords():
     }
 
 
-# ============================================================
-# 8) PLAYER TABLES (events + positions)
-# ============================================================
-
-def _frame_players(frame: dict, side: str) -> List[dict]:
-    arr = frame.get(side)
-    if not isinstance(arr, list):
-        return []
-    return [p for p in arr if isinstance(p, dict) and "p" in p and "x" in p and "y" in p]
-
-
-def _player_in_side(frame: dict, side: str, pid: int) -> bool:
-    for p in _frame_players(frame, side):
-        if _safe_int(p.get("p"), -1) == pid:
-            return True
-    return False
-
-
-def _nearest_time(target: int, times: np.ndarray) -> Optional[int]:
-    if times.size == 0:
-        return None
-    i = int(np.searchsorted(times, target))
-    if i <= 0:
-        return int(times[0])
-    if i >= len(times):
-        return int(times[-1])
-    prev_t = int(times[i - 1])
-    next_t = int(times[i])
-    return prev_t if abs(prev_t - target) <= abs(next_t - target) else next_t
-
-
-def _dist(a: Tuple[float, float], b: Tuple[float, float]) -> float:
-    return math.hypot(a[0] - b[0], a[1] - b[1])
-
-
-def _closest_defender(
-    frame: dict,
-    attacker_side: str,
-    attacker_pid: int,
-    defender_side: str,
-    allowed_defender_ids: set[int],
-) -> Optional[Tuple[int, Optional[int], float]]:
-    attacker_pl = None
-    for p in _frame_players(frame, attacker_side):
-        if _safe_int(p.get("p"), -1) == attacker_pid:
-            attacker_pl = p
-            break
-    if not attacker_pl:
-        return None
-
-    ax, ay = float(attacker_pl["x"]), float(attacker_pl["y"])
-    best_pid, best_jersey, best_d = None, None, 1e18
-
-    for p in _frame_players(frame, defender_side):
-        pid = _safe_int(p.get("p"), -1)
-        if pid < 0 or pid not in allowed_defender_ids:
-            continue
-        px, py = float(p["x"]), float(p["y"])
-        d = _dist((px, py), (ax, ay))
-        if d < best_d:
-            best_d = d
-            best_pid = pid
-            s = _safe_int(p.get("s"), -1)
-            best_jersey = None if s < 0 else s
-
-    if best_pid is None:
-        return None
-    return int(best_pid), best_jersey, float(best_d)
-
-
-def _infer_home_away_from_seq_df(seq_df: pd.DataFrame) -> Tuple[Optional[str], Optional[str]]:
-    home, away = None, None
-    if seq_df.empty or "groupName" not in seq_df.columns:
-        return None, None
-
-    for _, r in seq_df.iterrows():
-        tn = r.get("teamName")
-        gn = r.get("groupName")
-        if not isinstance(tn, str) or not tn.strip():
-            continue
-        if gn is None:
-            continue
-        gns = str(gn).strip().upper()
-        if gns in {"HOME", "H"} and home is None:
-            home = tn.strip()
-        elif gns in {"AWAY", "A"} and away is None:
-            away = tn.strip()
-        if home and away:
-            break
-    return home, away
-
-
-def _side_for_team(team_name: str, home: Optional[str], away: Optional[str]) -> Optional[str]:
-    if isinstance(home, str) and _canon_team(home) == _canon_team(team_name):
-        return "h"
-    if isinstance(away, str) and _canon_team(away) == _canon_team(team_name):
-        return "a"
-    return None
-
-
-def _infer_sides_from_frame(
-    *,
-    frame: dict,
-    corner_taker_id: Optional[int],
-    attacking_team: str,
-    home: Optional[str],
-    away: Optional[str],
-) -> Tuple[Optional[str], Optional[str]]:
-    if isinstance(corner_taker_id, int) and corner_taker_id >= 0:
-        if _player_in_side(frame, "h", corner_taker_id):
-            return "h", "a"
-        if _player_in_side(frame, "a", corner_taker_id):
-            return "a", "h"
-
-    att_side = _side_for_team(attacking_team, home, away)
-    if att_side == "h":
-        return "h", "a"
-    if att_side == "a":
-        return "a", "h"
-    return None, None
-
-
-def _is_shot_row(r: pd.Series) -> bool:
-    return (r.get("baseTypeName") == "SHOT") or (_safe_int(r.get("baseTypeId"), -1) == 6)
-
-
-def _is_goal_row(r: pd.Series) -> bool:
-    return r.get("resultName") == "SUCCESSFUL"
-
-
-def _is_header_shot_row(r: pd.Series) -> bool:
-    if not _is_shot_row(r):
-        return False
-    bp = r.get("bodyPartName")
-    return isinstance(bp, str) and bp.strip().upper() in HEADER_BODY_PART_NAMES
-
-
-def load_positions_samples_for_tables(
-    pos_csv: str,
-) -> Tuple[pd.DataFrame, Dict[Tuple[str, str], np.ndarray], Dict[Tuple[str, str, int], dict]]:
-    """
-    Returns:
-      pos_df_norm: normalized DF with match_id_from_file, corner_sequence_id, t, frame(dict)
-      times_by_ms: (mid, seq) -> sorted times (np.ndarray)
-      frame_by_key: (mid, seq, t) -> frame(dict)
-    """
-    pos = pd.read_csv(pos_csv, low_memory=False).where(pd.notnull, None)
-
-    if "source_positions_file" in pos.columns:
-        pos["match_id_from_file"] = pos["source_positions_file"].apply(_match_id_from_path)
-    elif "source_event_file" in pos.columns:
-        pos["match_id_from_file"] = pos["source_event_file"].apply(_match_id_from_path)
-    else:
-        raise ValueError("positions CSV needs source_positions_file or source_event_file")
-
-    if "sequence_id" in pos.columns and "corner_sequence_id" not in pos.columns:
-        pos = pos.rename(columns={"sequence_id": "corner_sequence_id"})
-
-    required = ["match_id_from_file", "corner_sequence_id", "t", "frame_json"]
-    missing = [c for c in required if c not in pos.columns]
-    if missing:
-        raise ValueError(f"positions CSV missing required columns: {missing}")
-
-    pos["match_id_from_file"] = pos["match_id_from_file"].astype(str)
-    pos["corner_sequence_id"] = pos["corner_sequence_id"].astype(str)
-    pos["t"] = pd.to_numeric(pos["t"], errors="coerce").astype("Int64")
-    pos = pos.dropna(subset=["t"]).copy()
-    pos["t"] = pos["t"].astype(int)
-
-    pos["frame"] = pos["frame_json"].apply(_parse_frame_json)
-    pos = pos.dropna(subset=["frame"]).copy()
-
-    times_by_ms: Dict[Tuple[str, str], List[int]] = defaultdict(list)
-    frame_by_key: Dict[Tuple[str, str, int], dict] = {}
-
-    for _, r in pos.iterrows():
-        mid = str(r["match_id_from_file"])
-        seq = str(r["corner_sequence_id"])
-        t = int(r["t"])
-        fr = r["frame"]
-        if not isinstance(fr, dict):
-            continue
-        times_by_ms[(mid, seq)].append(t)
-        frame_by_key[(mid, seq, t)] = fr
-
-    times_np: Dict[Tuple[str, str], np.ndarray] = {}
-    for k, ts in times_by_ms.items():
-        times_np[k] = np.array(sorted(set(ts)), dtype=int)
-
-    return pos, times_np, frame_by_key
-
-
-def _build_player_name_map(events_df: pd.DataFrame) -> Dict[int, str]:
-    m: Dict[int, str] = {}
-    if events_df.empty:
-        return m
-    for _, r in events_df.iterrows():
-        pid = _safe_int(r.get("playerId"), -1)
-        pn = r.get("playerName")
-        if pid >= 0 and isinstance(pn, str) and pn.strip() and pn != "NOT_APPLICABLE":
-            if pid not in m:
-                m[pid] = pn.strip()
-    return m
-
-
-def _team_player_ids(events_df: pd.DataFrame, team_canon: str) -> set[int]:
-    ids: set[int] = set()
-    for _, r in events_df.iterrows():
-        t = _canon_team(r.get("teamName"))
-        if t != team_canon:
-            continue
-        pid = _safe_int(r.get("playerId"), -1)
-        if pid >= 0:
-            ids.add(pid)
-    return ids
-
-
-def _gk_player_ids(events_df: pd.DataFrame, team_canon: str) -> set[int]:
-    if events_df is None or events_df.empty:
-        return set()
-    if "positionTypeName" not in events_df.columns:
-        return set()
-    gk = events_df[
-        (events_df["teamName"].apply(_canon_team) == team_canon)
-        & (events_df["positionTypeName"] == "GK")
-    ]
-    return {int(pid) for pid in pd.to_numeric(gk["playerId"], errors="coerce").dropna().astype(int).unique()}
-
-
-def filter_headers_for_team(headers_df: pd.DataFrame, team: str) -> pd.DataFrame:
-    if headers_df is None or headers_df.empty:
-        return pd.DataFrame()
-    if "club" not in headers_df.columns:
-        return pd.DataFrame()
-    team_c = _canon_team(team) or team
-    df = headers_df.copy()
-    df["__club_c"] = df["club"].apply(_canon_team)
-    return df[df["__club_c"] == team_c].copy()
-
-
-# --- PATCH: add jersey number ("s") before player name in both charts ---
-# File: wherever these plotting funcs live (e.g. oa.py)
-
-import numpy as np
-import pandas as pd
-import matplotlib.pyplot as plt
-
-
-def _build_player_label(df: pd.DataFrame, *, number_col: str = "s") -> pd.Series:
-    """
-    Returns label like '7. Genrich Sillé' when jersey number exists.
-    Falls back to 'Genrich Sillé' if number is missing/invalid.
-    """
-    name = df.get("player_name", pd.Series(["Unknown"] * len(df), index=df.index)).astype(str)
-
-    if number_col not in df.columns:
-        return name
-
-    num = pd.to_numeric(df[number_col], errors="coerce")
-    num_str = num.apply(lambda x: "" if pd.isna(x) else str(int(x)))
-    return np.where(num_str != "", num_str + ". " + name, name)
-
-
-def plot_defending_corner_players_diverging(
-    def_tbl: pd.DataFrame,
-    *,
-    max_players: int = 15,
-    title: str = "Defending corner players",
-):
-    """
-    Works with your dataset columns by mapping:
-      - Clearances  <- Defending_corners_defended
-      - Faults      <- Defending_corners_errors + Defending_corners_fatal_errors
-      - GoalsAllowed<- Defending_corners_fatal_errors
-
-    Also auto-aggregates (sums) over multiple rows per player_name (+ jersey number if present).
-    """
-    if def_tbl is None or def_tbl.empty:
-        fig, ax = plt.subplots(figsize=(8, 3))
-        ax.text(0.5, 0.5, "No data", ha="center", va="center")
-        ax.axis("off")
-        return fig
-
-    df = def_tbl.copy()
-
-    if "player_name" not in df.columns:
-        df["player_name"] = "Unknown"
-
-    if "Clearances" not in df.columns:
-        df["Clearances"] = df.get("Defending_corners_defended", 0)
-
-    if "GoalsAllowed" not in df.columns:
-        df["GoalsAllowed"] = df.get("Defending_corners_fatal_errors", 0)
-
-    if "Faults" not in df.columns:
-        df["Faults"] = df.get("Defending_corners_errors", 0) + df.get(
-            "Defending_corners_fatal_errors", 0
-        )
-
-    for c in ("Faults", "GoalsAllowed", "Clearances"):
-        df[c] = pd.to_numeric(df.get(c, 0), errors="coerce").fillna(0).astype(int)
-
-    group_cols = ["player_name"] + (["s"] if "s" in df.columns else [])
-    df = df.groupby(group_cols, as_index=False)[["Faults", "GoalsAllowed", "Clearances"]].sum()
-
-    df["GoalsAllowed"] = np.minimum(df["GoalsAllowed"], df["Faults"])
-    df["Faults_non_goal"] = np.maximum(df["Faults"] - df["GoalsAllowed"], 0)
-
-    df["Total"] = df["Faults"] + df["Clearances"]
-    df = df.sort_values(["Total", "Faults", "Clearances"], ascending=[False, False, False]).head(
-        max_players
-    )
-
-    df = df.iloc[::-1].reset_index(drop=True)
-
-    y = np.arange(len(df))
-    names = _build_player_label(df, number_col="s").tolist()
-
-    faults_goal = df["GoalsAllowed"].to_numpy()
-    faults_non_goal = df["Faults_non_goal"].to_numpy()
-    clearances = df["Clearances"].to_numpy()
-
-    fig_h = max(3.5, 0.45 * len(df) + 1.2)
-    fig, ax = plt.subplots(figsize=(10, fig_h))
-
-    ax.barh(y, -faults_goal, color="black", label="Player they marked scored from corner")
-    ax.barh(y, -faults_non_goal, left=-faults_goal, color="red", label="Player they marked shot from corner")
-    ax.barh(y, clearances, color="green", label="Clearances")
-
-    ax.axvline(0, linewidth=1)
-
-    ax.set_yticks(y)
-    ax.set_yticklabels(names)
-    ax.set_title(title)
-
-    left_max = (faults_goal + faults_non_goal).max() if len(df) else 1
-    right_max = clearances.max() if len(df) else 1
-    lim = max(left_max, right_max, 1)
-    ax.set_xlim(-lim * 1.15, lim * 1.15)
-
-    ax.spines["top"].set_visible(False)
-    ax.spines["right"].set_visible(False)
-
-    for i in range(len(df)):
-        f = int(df.loc[i, "Faults"])
-        g = int(df.loc[i, "GoalsAllowed"])
-        c = int(df.loc[i, "Clearances"])
-        if f > 0:
-            ax.text(-f - 0.05, y[i], f"{f}", va="center", ha="right", fontsize=9)
-        if c > 0:
-            ax.text(c + 0.05, y[i], f"{c}", va="center", ha="left", fontsize=9)
-        if g > 0:
-            ax.text(-g / 2, y[i], f"{g}", va="center", ha="center", fontsize=9, color="white")
-
-    ax.legend(loc="lower right")
-    fig.tight_layout()
-    return fig
-
-
-def plot_attacking_corner_players_headers(
-    att_tbl: pd.DataFrame,
-    *,
-    max_players: int = 15,
-    title: str = "Attacking corner players (Headers & Header goals)",
-):
-    """
-    Works with your dataset columns by mapping:
-      - Headshots <- Attacking_corners_headed
-      - HeadGoals <- Attacking_corners_headed_and_scored
-
-    Also auto-aggregates (sums) over multiple rows per player_name (+ jersey number if present).
-    """
-    if att_tbl is None or att_tbl.empty:
-        fig, ax = plt.subplots(figsize=(8, 3))
-        ax.text(0.5, 0.5, "No data", ha="center", va="center")
-        ax.axis("off")
-        return fig
-
-    df = att_tbl.copy()
-
-    if "player_name" not in df.columns:
-        df["player_name"] = "Unknown"
-
-    if "Headshots" not in df.columns:
-        df["Headshots"] = df.get("Attacking_corners_headed", 0)
-
-    if "HeadGoals" not in df.columns:
-        df["HeadGoals"] = df.get("Attacking_corners_headed_and_scored", 0)
-
-    for c in ("Headshots", "HeadGoals"):
-        df[c] = pd.to_numeric(df.get(c, 0), errors="coerce").fillna(0).astype(int)
-
-    group_cols = ["player_name"] + (["s"] if "s" in df.columns else [])
-    df = df.groupby(group_cols, as_index=False)[["Headshots", "HeadGoals"]].sum()
-
-    df["HeadGoals"] = np.minimum(df["HeadGoals"], df["Headshots"])
-    df["Headers_non_goal"] = np.maximum(df["Headshots"] - df["HeadGoals"], 0)
-
-    df = df.sort_values(["Headshots", "HeadGoals"], ascending=[False, False]).head(max_players)
-    df = df.iloc[::-1].reset_index(drop=True)
-
-    y = np.arange(len(df))
-    names = _build_player_label(df, number_col="s").tolist()
-
-    goals = df["HeadGoals"].to_numpy()
-    rest = df["Headers_non_goal"].to_numpy()
-    total_headers = df["Headshots"].to_numpy()
-
-    fig_h = max(3.5, 0.45 * len(df) + 1.2)
-    fig, ax = plt.subplots(figsize=(10, fig_h))
-
-    ax.barh(y, goals, color="darkgreen", label="Header goals")
-    ax.barh(y, rest, left=goals, color="lightgreen", label="Headers")
-
-    ax.set_yticks(y)
-    ax.set_yticklabels(names)
-    ax.set_title(title)
-
-    max_x = max(int(total_headers.max()) if len(df) else 1, 1)
-    ax.set_xlim(0, max_x * 1.15)
-
-    ax.spines["top"].set_visible(False)
-    ax.spines["right"].set_visible(False)
-
-    for i in range(len(df)):
-        th = int(total_headers[i])
-        g = int(goals[i])
-        if th > 0:
-            ax.text(th + 0.05, y[i], f"{th}", va="center", ha="left", fontsize=9)
-        if g > 0:
-            ax.text(g / 2, y[i], f"{g}", va="center", ha="center", fontsize=9, color="white")
-
-    ax.legend(loc="lower right")
-    fig.tight_layout()
-    return fig
 def load_corner_positions_headers(csv_path: str) -> pd.DataFrame:
     if not os.path.exists(csv_path):
         raise FileNotFoundError(f"corner_positions_headers.csv not found: {csv_path}")
     return pd.read_csv(csv_path, low_memory=False).where(pd.notnull, None)
 
-def _to_int_series(s: pd.Series) -> pd.Series:
-    return pd.to_numeric(s, errors="coerce").fillna(0).astype(int)
 
-# def build_attacking_headers_player_table(*, team: str, headers_df: pd.DataFrame) -> pd.DataFrame:
-#     if headers_df is None or headers_df.empty:
-#         return pd.DataFrame(columns=["player_name", "CornersOnPitch", "Headshots", "HeadGoals"])
+def attach_actual_club_from_events(headers_df: pd.DataFrame, events_seq_df: pd.DataFrame) -> pd.DataFrame:
+    if headers_df is None or headers_df.empty:
+        return headers_df
+    if events_seq_df is None or events_seq_df.empty:
+        return headers_df
 
-#     df = headers_df.copy()
-#     if "club" not in df.columns:
-#         return pd.DataFrame(columns=["player_name", "CornersOnPitch", "Headshots", "HeadGoals"])
+    ev = events_seq_df.copy()
 
-#     team_c = _canon_team(team) or team
-#     df["__club_c"] = df["club"].apply(_canon_team)
-#     df = df[df["__club_c"] == team_c].copy()
-#     if df.empty:
-#         return pd.DataFrame(columns=["player_name", "CornersOnPitch", "Headshots", "HeadGoals"])
+    if "match_id" not in ev.columns:
+        if "source_event_file" in ev.columns:
+            ev["match_id"] = ev["source_event_file"].apply(_match_id_from_path)
+        else:
+            return headers_df
 
-#     for col in ("Attacking_corners_on_pitch", "Attacking_corners_headed", "Attacking_corners_headed_and_scored"):
-#         if col not in df.columns:
-#             df[col] = 0
-#         df[col] = _to_int_series(df[col])
+    if "groupName" not in ev.columns or "teamName" not in ev.columns:
+        return headers_df
 
-#     if "player_name" not in df.columns:
-#         df["player_name"] = df.get("player_id", "Unknown").astype(str)
+    def _norm_group(x: Any) -> Optional[str]:
+        if not isinstance(x, str):
+            return None
+        s = x.strip().upper()
+        if s in {"HOME", "H"}:
+            return "HOME"
+        if s in {"AWAY", "A"}:
+            return "AWAY"
+        return None
 
-#     out = (
-#         df.groupby("player_name", dropna=False)[
-#             ["Attacking_corners_on_pitch", "Attacking_corners_headed", "Attacking_corners_headed_and_scored"]
-#         ]
-#         .sum()
-#         .reset_index()
-#         .rename(
-#             columns={
-#                 "Attacking_corners_on_pitch": "CornersOnPitch",
-#                 "Attacking_corners_headed": "Headshots",
-#                 "Attacking_corners_headed_and_scored": "HeadGoals",
-#             }
-#         )
-#     )
-#     out["HeadGoals"] = np.minimum(out["HeadGoals"], out["Headshots"])
-#     return out.sort_values(["CornersOnPitch", "Headshots", "HeadGoals"], ascending=[False, False, False]).reset_index(drop=True)
+    ev["__group"] = ev["groupName"].apply(_norm_group)
+    ev = ev.dropna(subset=["match_id", "__group", "teamName"]).copy()
 
-# def build_defending_headers_player_table(*, team: str, headers_df: pd.DataFrame) -> pd.DataFrame:
-#     if headers_df is None or headers_df.empty:
-#         return pd.DataFrame(columns=["player_name", "CornersOnPitch", "Faults", "GoalsAllowed", "Clearances"])
+    map_rows = (
+        ev.groupby(["match_id", "__group"])["teamName"]
+        .agg(lambda s: s.value_counts().index[0])
+        .reset_index()
+        .rename(columns={"__group": "club", "teamName": "club_actual"})
+    )
 
-#     df = headers_df.copy()
-#     if "club" not in df.columns:
-#         return pd.DataFrame(columns=["player_name", "CornersOnPitch", "Faults", "GoalsAllowed", "Clearances"])
+    out = headers_df.copy()
+    if "match_id" not in out.columns or "club" not in out.columns:
+        return out
 
-#     team_c = _canon_team(team) or team
-#     df["__club_c"] = df["club"].apply(_canon_team)
-#     df = df[df["__club_c"] == team_c].copy()
-#     if df.empty:
-#         return pd.DataFrame(columns=["player_name", "CornersOnPitch", "Faults", "GoalsAllowed", "Clearances"])
+    out["match_id"] = out["match_id"].astype(str)
+    map_rows["match_id"] = map_rows["match_id"].astype(str)
 
-#     for col in ("Defending_corners_on_pitch", "Defending_corners_errors", "Defending_corners_fatal_errors", "Defending_corners_defended"):
-#         if col not in df.columns:
-#             df[col] = 0
-#         df[col] = _to_int_series(df[col])
+    out = out.merge(map_rows, on=["match_id", "club"], how="left")
+    out["club_actual_canon"] = out["club_actual"].apply(_canon_team)
+    return out
 
-#     if "player_name" not in df.columns:
-#         df["player_name"] = df.get("player_id", "Unknown").astype(str)
-
-#     out = (
-#         df.groupby("player_name", dropna=False)[
-#             ["Defending_corners_on_pitch", "Defending_corners_errors", "Defending_corners_fatal_errors", "Defending_corners_defended"]
-#         ]
-#         .sum()
-#         .reset_index()
-#         .rename(
-#             columns={
-#                 "Defending_corners_on_pitch": "CornersOnPitch",
-#                 "Defending_corners_errors": "Faults",
-#                 "Defending_corners_fatal_errors": "GoalsAllowed",
-#                 "Defending_corners_defended": "Clearances",
-#             }
-#         )
-#     )
-#     out["GoalsAllowed"] = np.minimum(out["GoalsAllowed"], out["Faults"])
-#     return out.sort_values(["CornersOnPitch", "Faults", "GoalsAllowed", "Clearances"], ascending=[False, False, False, False]).reset_index(drop=True)
-
-# ============================================================
-# 9) OPTIONAL: paths container
-# ============================================================
 
 @dataclass(frozen=True)
 class VizPaths:

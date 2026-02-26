@@ -90,9 +90,12 @@ def set_matplotlib_bg(bg_hex: str) -> None:
     mpl.rcParams["axes.facecolor"] = bg_hex
 
 
-CORNER_EVENTS_CSV = "data/corner_events_all_matches.csv"
-EVENTS_SEQ_CSV = "data/corner_events_full_sequences.csv"
-HEADERS_CSV = "data/corner_positions_headers.csv"
+
+DATA_ROOT = Path(os.getenv("APP_DATA_ROOT", "data"))
+
+CORNER_EVENTS_CSV = str(DATA_ROOT / "corner_events_all_matches.csv")
+EVENTS_SEQ_CSV = str(DATA_ROOT / "corner_events_full_sequences.csv")
+HEADERS_CSV = str(DATA_ROOT / "corner_positions_headers.csv")
 
 IMG_PATHS = {
     "def_L": "images/no_names_left.png",

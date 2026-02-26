@@ -357,7 +357,6 @@ def _render_header(
         unsafe_allow_html=True,
     )
 
-
 def _generate_filled_pptx(
     *,
     json_data_full: dict,
@@ -444,18 +443,19 @@ def _generate_filled_pptx(
     (tot_dR, ids_dR, pcts_dR) = results["defensive"]["right"]
     fig_def_R = oa.plot_shots_defensive(get_img_path("def_R"), viz_config["def_R"], pcts_dR, tot_dR, ids_dR)
 
+    # ✅ Build header charts from FULL SEQUENCES (not headers CSV)
     fig_att_headers = None
     fig_def_headers = None
     try:
-        if os.path.exists(HEADERS_CSV) and os.path.exists(EVENTS_SEQ_CSV):
-            headers_df = load_headers(HEADERS_CSV, st.session_state.dataset_id)
+        if os.path.exists(EVENTS_SEQ_CSV):
             seq_df = load_events_sequences(EVENTS_SEQ_CSV, st.session_state.dataset_id)
-            headers_df = oa.attach_actual_club_from_events(headers_df, seq_df)
-            team_c = oa._canon_team(selected_team) or selected_team
-            df_team = headers_df[headers_df["club_actual_canon"] == team_c].copy()
-            if not df_team.empty:
-                fig_att_headers = oa.plot_attacking_corner_players_headers(df_team, max_players=15)
-                fig_def_headers = oa.plot_defending_corner_players_diverging(df_team, max_players=15)
+            att_tbl, def_tbl = oa.build_header_tables_from_full_sequences(seq_df, team=selected_team)
+
+            if att_tbl is not None and not att_tbl.empty:
+                fig_att_headers = oa.plot_attacking_corner_players_headers(att_tbl, max_players=15)
+
+            if def_tbl is not None and not def_tbl.empty:
+                fig_def_headers = oa.plot_defending_corner_players_diverging(def_tbl, max_players=15)
     except Exception:
         pass
 
@@ -472,6 +472,7 @@ def _generate_filled_pptx(
         },
     }
 
+    # ✅ These tokens now insert reliably (ppt filler uses exact=False for them)
     images_by_token = {
         "{att_corners_headers}": [fig_to_png_bytes_labels(fig_att_headers, dpi=360)] if fig_att_headers is not None else [],
         "{def_corners_headers}": [fig_to_png_bytes_labels(fig_def_headers, dpi=360)] if fig_def_headers is not None else [],
@@ -499,7 +500,6 @@ def _generate_filled_pptx(
         right_takers_df=results["tables"]["right"],
     )
     return payload.pptx_bytes, payload.filename
-
 
 # ---------------- UI ----------------
 _center_container_css()

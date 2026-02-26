@@ -180,7 +180,7 @@ def get_league_stats(json_data, cache_buster: str):
 @st.cache_data
 def get_canonical_team_options(json_data_full: dict, cache_buster: str) -> List[str]:
     _ = cache_buster
-    canon: Set[str] = set()
+    canon: set[str] = set()
 
     for match in (json_data_full.get("matches", []) or []):
         for ev in (match.get("corner_events", []) or []):
@@ -191,15 +191,14 @@ def get_canonical_team_options(json_data_full: dict, cache_buster: str) -> List[
             if not raw_s:
                 continue
 
-            # This should apply TEAM_NAME_MAPPING and return None for NOT_APPLICABLE
+            # TEAM_NAME_MAPPING should map NOT_APPLICABLE -> None
             c = oa.get_canonical_team(raw_s)
 
-            # Keep ONLY mapped results (and keep raw if your mapping returns identity for unknowns)
+            # ✅ This removes NOT_APPLICABLE (None) and any other unmapped Nones
             if c:
                 canon.add(c)
 
     return sorted(canon)
-
 
 def _match_dt(match: dict) -> datetime:
     dt = match.get("match_date")

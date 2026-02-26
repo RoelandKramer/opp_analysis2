@@ -379,7 +379,7 @@ def _generate_filled_pptx(
         tot_L,
         shot_L,
         pctiles_L,
-        min_zone_corners=4,
+        min_zone_corners=0,
         font_size=16,
     )
 
@@ -392,7 +392,7 @@ def _generate_filled_pptx(
         tot_R,
         shot_R,
         pctiles_R,
-        min_zone_corners=4,
+        min_zone_corners=0,
         font_size=16,
     )
 

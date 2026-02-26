@@ -184,17 +184,11 @@ def get_canonical_team_options(json_data_full: dict, cache_buster: str) -> List[
 
     for match in (json_data_full.get("matches", []) or []):
         for ev in (match.get("corner_events", []) or []):
-            raw = ev.get("teamName")
-            if raw is None:
-                continue
-            raw_s = str(raw).strip()
-            if not raw_s:
+            raw_s = str(ev.get("teamName") or "").strip()
+            if not raw_s or raw_s.upper() == "NOT_APPLICABLE":
                 continue
 
-            # TEAM_NAME_MAPPING should map NOT_APPLICABLE -> None
             c = oa.get_canonical_team(raw_s)
-
-            # ✅ This removes NOT_APPLICABLE (None) and any other unmapped Nones
             if c:
                 canon.add(c)
 

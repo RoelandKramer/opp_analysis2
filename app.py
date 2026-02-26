@@ -178,18 +178,27 @@ def get_league_stats(json_data, cache_buster: str):
 
 
 @st.cache_data
-def get_team_list_from_teamName(json_data_full: dict, cache_buster: str) -> List[str]:
+def get_canonical_team_options(json_data_full: dict, cache_buster: str) -> List[str]:
     _ = cache_buster
-    teams: set[str] = set()
+    canon: Set[str] = set()
+
     for match in (json_data_full.get("matches", []) or []):
         for ev in (match.get("corner_events", []) or []):
-            tn = ev.get("teamName")
-            if tn is None:
+            raw = ev.get("teamName")
+            if raw is None:
                 continue
-            s = str(tn).strip()
-            if s:
-                teams.add(s)
-    return sorted(teams)
+            raw_s = str(raw).strip()
+            if not raw_s:
+                continue
+
+            # This should apply TEAM_NAME_MAPPING and return None for NOT_APPLICABLE
+            c = oa.get_canonical_team(raw_s)
+
+            # Keep ONLY mapped results (and keep raw if your mapping returns identity for unknowns)
+            if c:
+                canon.add(c)
+
+    return sorted(canon)
 
 
 def _match_dt(match: dict) -> datetime:
@@ -469,7 +478,9 @@ if not os.path.exists(CORNER_EVENTS_CSV):
     st.stop()
 
 json_data_full = load_corner_jsonlike(CORNER_EVENTS_CSV, DATASET_ID)
-all_teams = get_team_list_from_teamName(json_data_full, DATASET_ID)
+all_teams = get_canonical_team_options(json_data_full, DATASET_ID)
+selected_team = st.selectbox("Select team", all_teams)
+
 if not all_teams:
     st.error("❌ No teams found in dataset.")
     st.stop()

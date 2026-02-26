@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import io
 import os
+import re
 from dataclasses import dataclass
 from typing import Dict, Iterable, List, Optional, Tuple
 
@@ -32,6 +33,16 @@ CROP_BY_SHAPE_NAME: Dict[str, CropSpec] = {
     "PH_Corners_right_shots_vis": CropSpec(bottom=0.2514),
     "PH_def_left": CropSpec(bottom=0.2514),
     "PH_def_right": CropSpec(bottom=0.2514),
+    # add cropping here later if needed:
+    # "PH_att_c_headers": CropSpec(...),
+    # "PH_def_c_headers": CropSpec(...),
+}
+
+
+# If shape-name placement fails, we try token placement as a fallback.
+FALLBACK_SHAPE_TO_TOKEN: Dict[str, str] = {
+    "PH_att_c_headers": "{att_corners_headers}",
+    "PH_def_c_headers": "{def_corners_headers}",
 }
 
 
@@ -303,9 +314,24 @@ def _fill_token_with_images(slide, token: str, images: List[bytes], *, exact: bo
         _insert_picture_fill(slide, delete_shape=del_shp, left=left, top=top, w=w, h=h, img_bytes=img)
 
 
+def _normalize_name(s: Optional[str]) -> str:
+    if not s:
+        return ""
+    # Normalize spaces and case
+    s2 = re.sub(r"\s+", " ", s).strip().lower()
+    return s2
+
+
 def _find_shape_by_name_mapped(slide, shape_name: str) -> Optional[ShapeMapped]:
+    target = _normalize_name(shape_name)
     for shp, ax, ay, aw, ah, parent in iter_shapes_mapped(slide):
-        if getattr(shp, "name", None) == shape_name:
+        nm = _normalize_name(getattr(shp, "name", None))
+        if nm == target:
+            return shp, ax, ay, aw, ah, parent
+    # second pass: allow substring match (covers weird suffix/prefix issues)
+    for shp, ax, ay, aw, ah, parent in iter_shapes_mapped(slide):
+        nm = _normalize_name(getattr(shp, "name", None))
+        if target and nm and (target in nm or nm in target):
             return shp, ax, ay, aw, ah, parent
     return None
 
@@ -431,6 +457,7 @@ def fill_corner_template_pptx(
     }
 
     remaining_named = _flatten_images_by_shape_name(images_by_shape_name)
+    remaining_named_original = dict(remaining_named)
 
     for slide in prs.slides:
         _set_slide_background(slide, bg_hex=team_secondary_hex)
@@ -459,6 +486,7 @@ def fill_corner_template_pptx(
             replaced_shape_names.add(shape_name)
             remaining_named.pop(shape_name, None)
 
+        # token images
         for token, imgs in (images_by_token or {}).items():
             if token in ("{top_bar}", "{bottom_bar}", "{middle_bar}"):
                 continue
@@ -467,7 +495,6 @@ def fill_corner_template_pptx(
             if mapped_name and mapped_name in replaced_shape_names:
                 continue
 
-            # ✅ KEY FIX: these two tokens are often not an exact match in PPT runs
             if token in ("{att_corners_headers}", "{def_corners_headers}"):
                 _fill_token_with_images(slide, token, imgs, exact=False)
             else:
@@ -477,10 +504,19 @@ def fill_corner_template_pptx(
             for shp, *_ in _find_shapes_with_token(slide, tok):
                 _clear_token_text(shp, tok)
 
+    # ✅ FINAL fallback: if PH_att/def_c_headers were NOT found by name, place them by token
+    # (This covers master/layout shapes, or name mismatch, etc.)
+    for shape_name, token in FALLBACK_SHAPE_TO_TOKEN.items():
+        if shape_name in remaining_named:
+            # try to place via token anywhere it exists (non-exact match)
+            img_bytes = remaining_named[shape_name]
+            for slide in prs.slides:
+                _fill_token_with_images(slide, token, [img_bytes], exact=False)
+            remaining_named.pop(shape_name, None)
+
     _fill_takers_tables(prs, left_takers_df, right_takers_df)
 
     out = io.BytesIO()
     prs.save(out)
-
     fname = f"OpponentAnalysis_Corners_{team_name.replace(' ', '_')}.pptx"
     return FilledPptPayload(pptx_bytes=out.getvalue(), filename=fname)

@@ -251,8 +251,145 @@ def _iter_numbers(x: Any) -> Iterable[float]:
         yield float(x)
 
 
+def plot_attacking_corner_players_headers(
+    att_tbl: pd.DataFrame,
+    *,
+    max_players: int = 15,
+) -> "plt.Figure":
+    """
+    Plot attacking corner headers per player.
+    Expected columns:
+      - player_name
+      - Attacking_corners_headed
+      - Attacking_corners_headed_and_scored
+    """
+    if att_tbl is None or att_tbl.empty:
+        fig, ax = plt.subplots(figsize=(10, 6))
+        ax.axis("off")
+        ax.text(0.5, 0.5, "No attacking header shots found", ha="center", va="center", fontsize=16)
+        return fig
+
+    df = att_tbl.copy()
+    df["Attacking_corners_headed"] = pd.to_numeric(df["Attacking_corners_headed"], errors="coerce").fillna(0).astype(int)
+    df["Attacking_corners_headed_and_scored"] = (
+        pd.to_numeric(df["Attacking_corners_headed_and_scored"], errors="coerce").fillna(0).astype(int)
+    )
+
+    df = df.sort_values(["Attacking_corners_headed", "Attacking_corners_headed_and_scored"], ascending=False).head(max_players)
+    df = df.iloc[::-1]  # plot bottom-up for nicer labels
+
+    fig, ax = plt.subplots(figsize=(12, 7))
+    y = np.arange(len(df))
+
+    headed = df["Attacking_corners_headed"].to_numpy()
+    scored = df["Attacking_corners_headed_and_scored"].to_numpy()
+
+    ax.barh(y, headed)
+    ax.barh(y, scored)
+
+    ax.set_yticks(y)
+    ax.set_yticklabels(df["player_name"].astype(str).tolist(), fontsize=11)
+    ax.set_xlabel("Count", fontsize=12)
+    ax.set_title("Attacking corner headers (shots / goals)", fontsize=14, weight="bold")
+
+    for i, (h, s) in enumerate(zip(headed, scored)):
+        label = f"{int(h)} / {int(s)}"
+        ax.text(
+            max(h, s) + 0.1,
+            i,
+            label,
+            va="center",
+            fontsize=11,
+            path_effects=[PathEffects.withStroke(linewidth=2, foreground="white")],
+        )
+
+    ax.grid(axis="x", alpha=0.25)
+    fig.tight_layout()
+    return fig
+
+
+def plot_defending_corner_players_diverging(
+    def_tbl: pd.DataFrame,
+    *,
+    max_players: int = 15,
+) -> "plt.Figure":
+    """
+    Plot defending corner header outcomes per opponent player (diverging style).
+    Expected columns:
+      - player_name
+      - Defending_corners_errors
+      - Defending_corners_fatal_errors
+      - Defending_corners_defended (optional)
+    """
+    if def_tbl is None or def_tbl.empty:
+        fig, ax = plt.subplots(figsize=(10, 6))
+        ax.axis("off")
+        ax.text(0.5, 0.5, "No defending header shots found", ha="center", va="center", fontsize=16)
+        return fig
+
+    df = def_tbl.copy()
+    df["Defending_corners_errors"] = pd.to_numeric(df["Defending_corners_errors"], errors="coerce").fillna(0).astype(int)
+    df["Defending_corners_fatal_errors"] = (
+        pd.to_numeric(df["Defending_corners_fatal_errors"], errors="coerce").fillna(0).astype(int)
+    )
+    if "Defending_corners_defended" in df.columns:
+        df["Defending_corners_defended"] = pd.to_numeric(df["Defending_corners_defended"], errors="coerce").fillna(0).astype(int)
+    else:
+        df["Defending_corners_defended"] = 0
+
+    # rank by "badness"
+    df["_rank"] = df["Defending_corners_errors"] + 2 * df["Defending_corners_fatal_errors"]
+    df = df.sort_values("_rank", ascending=False).head(max_players)
+    df = df.iloc[::-1]
+
+    fig, ax = plt.subplots(figsize=(12, 7))
+    y = np.arange(len(df))
+
+    errors = df["Defending_corners_errors"].to_numpy()
+    fatal = df["Defending_corners_fatal_errors"].to_numpy()
+    defended = df["Defending_corners_defended"].to_numpy()
+
+    # diverging: defended on left (negative), errors/fatal on right (positive)
+    ax.barh(y, -defended)
+    ax.barh(y, errors)
+    ax.barh(y, fatal)
+
+    ax.set_yticks(y)
+    ax.set_yticklabels(df["player_name"].astype(str).tolist(), fontsize=11)
+    ax.set_xlabel("Count (left = defended, right = errors/goals)", fontsize=12)
+    ax.set_title("Defending corner headers (defended vs conceded)", fontsize=14, weight="bold")
+
+    ax.axvline(0, linewidth=1, alpha=0.6)
+
+    for i, (d, e, f) in enumerate(zip(defended, errors, fatal)):
+        ax.text(
+            max(e, f) + 0.1,
+            i,
+            f"{int(e)} / {int(f)}",
+            va="center",
+            fontsize=11,
+            path_effects=[PathEffects.withStroke(linewidth=2, foreground="white")],
+        )
+        if d > 0:
+            ax.text(
+                -d - 0.1,
+                i,
+                f"{int(d)}",
+                va="center",
+                ha="right",
+                fontsize=11,
+                path_effects=[PathEffects.withStroke(linewidth=2, foreground="white")],
+            )
+
+    ax.grid(axis="x", alpha=0.25)
+    fig.tight_layout()
+    return fig
+    
+
 def _round_up_to_step(value: float, step: float) -> float:
     return math.ceil(value / step) * step
+
+
 
 def build_header_tables_from_full_sequences(
     seq_df: pd.DataFrame,

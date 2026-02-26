@@ -586,7 +586,7 @@ def _assign_zone(ex: float, ey: float, zones: Dict[str, List[Tuple[float, float]
         if point_in_rect(ex, ey, r):
             return n
     return None
-
+    
 def _sequence_has_shot(seq: List[Dict[str, Any]]) -> bool:
     for ev in seq or []:
         bt = str(ev.get("baseTypeName") or "").strip().upper()
@@ -596,14 +596,14 @@ def _sequence_has_shot(seq: List[Dict[str, Any]]) -> bool:
         if _safe_int(ev.get("baseTypeId"), -1) == 6:
             return True
 
-        # extra strong signal in many feeds
+        # Women feed often includes these even when baseTypeName differs
         if ev.get("shotTypeId") is not None or str(ev.get("shotTypeName") or "").strip():
             return True
 
         rn = str(ev.get("resultName") or "").strip().upper()
-        if rn in {"WIDE", "ON_TARGET", "OFF_TARGET", "GOAL", "SAVED", "BLOCKED"}:
-            return True
         if "SHOT" in rn or "GOAL" in rn:
+            return True
+        if rn in {"WIDE", "ON_TARGET", "OFF_TARGET", "SAVED", "BLOCKED", "GOAL"}:
             return True
 
         labels = ev.get("labels")

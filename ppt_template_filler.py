@@ -116,7 +116,12 @@ def fig_to_png_bytes_labels(fig: matplotlib.figure.Figure, *, dpi: int = 240) ->
     )
     return bio.getvalue()
 
-
+def _flatten_images_by_shape_name(images_by_shape_name: Optional[Dict[int, Dict[str, bytes]]]) -> Dict[str, bytes]:
+    flat: Dict[str, bytes] = {}
+    for _slide_idx, mapping in (images_by_shape_name or {}).items():
+        for shape_name, img_bytes in (mapping or {}).items():
+            flat[shape_name] = img_bytes
+    return flat
 # ============================================================
 # Cropping
 # ============================================================
@@ -542,42 +547,51 @@ def fill_corner_template_pptx(
             _fill_token_with_images(slide, "{LOGO}", [logo_bytes], exact=True)
 
         # 1) Named placeholders (authoritative)
-        named_for_slide = (images_by_shape_name or {}).get(slide_idx, {})
-        replaced_shape_names = set(named_for_slide.keys())
-        
-        for shape_name, img_bytes in named_for_slide.items():
+    remaining_named = _flatten_images_by_shape_name(images_by_shape_name)
+
+    for slide_idx, slide in enumerate(prs.slides):
+        _set_slide_background(slide, bg_hex=team_secondary_hex)
+        _color_background_rectangles(slide, bg_hex=team_secondary_hex, slide_w=slide_w, slide_h=slide_h)
+        _color_top_and_bottom_bars(slide, bar_hex=team_primary_hex, slide_w=slide_w, slide_h=slide_h)
+
+        for shp, *_ in iter_shapes_mapped(slide):
+            _replace_text_in_shape(shp, base_repl)
+
+        if logo_path and os.path.exists(logo_path):
+            with open(logo_path, "rb") as f:
+                logo_bytes = f.read()
+            _fill_token_with_images(slide, "{LOGO}", [logo_bytes], exact=True)
+
+        # 1) Named placeholders (robust: by shape name across all slides)
+        replaced_shape_names: set[str] = set()
+        for shape_name, img_bytes in list(remaining_named.items()):
+            hit = _find_shape_by_name_mapped(slide, shape_name)
+            if hit is None:
+                continue
+
             crop_spec = CROP_BY_SHAPE_NAME.get(shape_name)
             if crop_spec is not None:
                 img_bytes = crop_png_bytes(img_bytes, crop=crop_spec)
-        
+
             _replace_named_shape_with_picture(slide, shape_name, img_bytes)
+            replaced_shape_names.add(shape_name)
+            remaining_named.pop(shape_name, None)
+
         # 2) Token placeholders (ONLY for not-renamed items)
         for token, imgs in (images_by_token or {}).items():
-            if token in ("{top_bar}", "{bottom_bar}"):
+            if token in ("{top_bar}", "{bottom_bar}", "{middle_bar}"):
                 continue
 
             mapped_name = token_to_named.get(token)
             if mapped_name and mapped_name in replaced_shape_names:
                 continue
 
-            # If template still uses token for this plot, apply same crop here too.
-            # if token == "{Corners_left_positions_vis}" and imgs:
-            #     imgs = [ _crop_att_left_plot(imgs[0]), *imgs[1:] ]
-
-            # Defensive plots now placed by PH_def_left/PH_def_right in your app,
-            # so don't allow the old token to overwrite.
-            if token == "{def_Corners_left_shots_vis}" and (
-                "PH_def_left" in replaced_shape_names or "PH_def_right" in replaced_shape_names
-            ):
-                continue
-
             _fill_token_with_images(slide, token, imgs, exact=True)
 
         # Clear bar tokens
-        for tok in ("{top_bar}", "{middle_bar}", "{bottom_bar}"):            
+        for tok in ("{top_bar}", "{middle_bar}", "{bottom_bar}"):
             for shp, *_ in _find_shapes_with_token(slide, tok):
                 _clear_token_text(shp, tok)
-
     # tables
     _fill_takers_tables(prs, left_takers_df, right_takers_df)
     

@@ -17,18 +17,6 @@ from pptx.enum.shapes import MSO_SHAPE_TYPE
 from pptx.util import Pt
 
 
-# ============================================================
-# Config
-# ============================================================
-
-# Your named placeholder for Att. Corners Left plot
-# CROP_SHAPE_NAME = "PH_Corners_left_positions_vis"
-
-# Crop that plot after rendering: remove whitespace top+bottom.
-# (Based on your manual crop screenshot: the issue is BOTH top and bottom padding.)
-# CROP_SPEC_ATT_LEFT = ("top", 0.15)  # 15% top AND 15% bottom
-# ---- Crop configuration per placeholder ----
-
 @dataclass(frozen=True)
 class CropSpec:
     left: float = 0.0
@@ -36,50 +24,25 @@ class CropSpec:
     top: float = 0.0
     bottom: float = 0.0
 
-CROP_BY_SHAPE_NAME: Dict[str, CropSpec] = {
-    # ------------------
-    # TOP positions plots: crop top+bottom so height 1.52 -> 1.45
-    # total vertical crop = 0.04605, split evenly:
-    # top=0.0230, bottom=0.0230
-    # ------------------
-    "PH_Corners_left_positions_vis": CropSpec(
-        left=0.0104, 
-        top=0.1730, 
-        bottom=0.0230)
-    
-    ,
-    "PH_Corners_right_positions_vis": CropSpec(left=0.0104, 
-           right=0.0700, 
-           top=0.1217, 
-           bottom=0.2993),
 
-    # ------------------
-    # Shots + defensive plots: crop bottom so height 1.75 -> 1.31
-    # bottom crop = 0.2514
-    # ------------------
+CROP_BY_SHAPE_NAME: Dict[str, CropSpec] = {
+    "PH_Corners_left_positions_vis": CropSpec(left=0.0104, top=0.1730, bottom=0.0230),
+    "PH_Corners_right_positions_vis": CropSpec(left=0.0104, right=0.0700, top=0.1217, bottom=0.2993),
     "PH_Corners_left_shots_vis": CropSpec(bottom=0.2514),
     "PH_Corners_right_shots_vis": CropSpec(bottom=0.2514),
     "PH_def_left": CropSpec(bottom=0.2514),
     "PH_def_right": CropSpec(bottom=0.2514),
 }
 
-# ============================================================
-# Basics
-# ============================================================
 
 def _hex_to_rgb(hex_color: str) -> RGBColor:
     s = (hex_color or "").strip().lstrip("#")
     if len(s) != 6:
         return RGBColor(255, 255, 255)
     return RGBColor(int(s[0:2], 16), int(s[2:4], 16), int(s[4:6], 16))
-def _find_tables(slide) -> List:
-    return [shp.table for shp in slide.shapes if getattr(shp, "has_table", False)]
+
 
 def fig_to_png_bytes(fig: matplotlib.figure.Figure, *, dpi: int = 240) -> bytes:
-    """
-    Full-canvas export. Avoid bbox_inches='tight' to prevent shrinking.
-    Use for "full-bleed" charts (zone overlays).
-    """
     try:
         fig.subplots_adjust(left=0, right=1, top=1, bottom=0, wspace=0, hspace=0)
         fig.patch.set_alpha(0)
@@ -90,43 +53,14 @@ def fig_to_png_bytes(fig: matplotlib.figure.Figure, *, dpi: int = 240) -> bytes:
         pass
 
     bio = io.BytesIO()
-    fig.savefig(
-        bio,
-        format="png",
-        dpi=dpi,
-        transparent=True,
-        bbox_inches=None,
-        pad_inches=0,
-    )
+    fig.savefig(bio, format="png", dpi=dpi, transparent=True, bbox_inches=None, pad_inches=0)
     return bio.getvalue()
 
 
 def fig_to_png_bytes_labels(fig: matplotlib.figure.Figure, *, dpi: int = 240) -> bytes:
-    """
-    Export preserving margins for axis labels (player charts).
-    Use when you need y-axis player names visible.
-    """
     bio = io.BytesIO()
-    fig.savefig(
-        bio,
-        format="png",
-        dpi=dpi,
-        transparent=True,
-        bbox_inches="tight",
-        pad_inches=0.08,
-    )
+    fig.savefig(bio, format="png", dpi=dpi, transparent=True, bbox_inches="tight", pad_inches=0.08)
     return bio.getvalue()
-
-def _flatten_images_by_shape_name(images_by_shape_name: Optional[Dict[int, Dict[str, bytes]]]) -> Dict[str, bytes]:
-    flat: Dict[str, bytes] = {}
-    for _slide_idx, mapping in (images_by_shape_name or {}).items():
-        for shape_name, img_bytes in (mapping or {}).items():
-            flat[shape_name] = img_bytes
-    return flat
-# ============================================================
-# Cropping
-# ============================================================
-
 
 
 def _clamp(v: float, lo: float, hi: float) -> float:
@@ -134,9 +68,6 @@ def _clamp(v: float, lo: float, hi: float) -> float:
 
 
 def crop_png_bytes(img_bytes: bytes, *, crop: CropSpec) -> bytes:
-    """
-    Crops PNG bytes by fractional trims on each side.
-    """
     im = Image.open(io.BytesIO(img_bytes)).convert("RGBA")
     w, h = im.size
 
@@ -157,20 +88,7 @@ def crop_png_bytes(img_bytes: bytes, *, crop: CropSpec) -> bytes:
     return out.getvalue()
 
 
-# def _crop_att_left_plot(img_bytes: bytes) -> bytes:
-#     mode, frac = CROP_SPEC_ATT_LEFT
-#     if mode == "top":
-#         return crop_png_bytes(img_bytes, crop=CropSpec(top=frac))
-#     if mode == "top_bottom":
-#         return crop_png_bytes(img_bytes, crop=CropSpec(top=frac, bottom=frac))
-#     return img_bytes
-
-# ============================================================
-# GROUP-mapped traversal (handles scaling inside GROUPs)
-# ============================================================
-
 ShapeMapped = Tuple[object, int, int, int, int, Optional[object]]
-# (shape, abs_left, abs_top, abs_w, abs_h, parent_group_shape)
 
 
 def _children_bbox(group_shape) -> Tuple[int, int, int, int]:
@@ -231,10 +149,6 @@ def iter_shapes_mapped(
             )
 
 
-# ============================================================
-# Text helpers
-# ============================================================
-
 def _shape_text(shp) -> str:
     if not getattr(shp, "has_text_frame", False):
         return ""
@@ -282,10 +196,6 @@ def _clear_token_text(shp, token: str) -> None:
                 run.text = run.text.replace(token, "")
 
 
-# ============================================================
-# Shape delete / fill / bg
-# ============================================================
-
 def _delete_shape(shp) -> None:
     try:
         el = shp.element
@@ -309,10 +219,6 @@ def _set_shape_fill(shp, *, hex_color: str) -> None:
         pass
 
 
-# ============================================================
-# Token finders
-# ============================================================
-
 def _find_shapes_with_token(slide, token: str) -> List[ShapeMapped]:
     out: List[ShapeMapped] = []
     for shp, ax, ay, aw, ah, parent in iter_shapes_mapped(slide):
@@ -332,10 +238,6 @@ def _find_shapes_with_token_exact(slide, token: str) -> List[ShapeMapped]:
             out.append((shp, ax, ay, aw, ah, parent))
     return out
 
-
-# ============================================================
-# Coloring: background rectangles & bars
-# ============================================================
 
 def _color_background_rectangles(slide, *, bg_hex: str, slide_w: int, slide_h: int) -> None:
     for shp, ax, ay, aw, ah, _ in iter_shapes_mapped(slide):
@@ -365,20 +267,16 @@ def _color_and_clear_token_shapes(slide, token: str, *, hex_color: str) -> None:
 
 
 def _color_top_and_bottom_bars(slide, *, bar_hex: str, slide_w: int, slide_h: int) -> None:
-    # heuristic fallback
     for shp, ax, ay, aw, ah, _ in iter_shapes_mapped(slide):
         if _is_bar_candidate(ax, ay, aw, ah, slide_w, slide_h):
             _set_shape_fill(shp, hex_color=bar_hex)
 
-    # token-based deterministic (and remove placeholder text)
     _color_and_clear_token_shapes(slide, "{top_bar}", hex_color=bar_hex)
-    _color_and_clear_token_shapes(slide, "{middle_bar}", hex_color=bar_hex)  # same as bottom_bar
+    _color_and_clear_token_shapes(slide, "{middle_bar}", hex_color=bar_hex)
     _color_and_clear_token_shapes(slide, "{bottom_bar}", hex_color=bar_hex)
-# ============================================================
-# Picture insertion: by token & by shape name
-# ============================================================
 
-Target = Tuple[object, int, int, int, int]  # (token_shape_to_delete, left, top, w, h)
+
+Target = Tuple[object, int, int, int, int]
 
 
 def _find_token_targets(slide, token: str, *, exact: bool = True) -> List[Target]:
@@ -422,39 +320,40 @@ def _replace_named_shape_with_picture(slide, shape_name: str, img_bytes: bytes) 
     slide.shapes.add_picture(io.BytesIO(img_bytes), ax, ay, width=aw, height=ah)
     return True
 
-# ============================================================
-# Tables (by shape name, robust to template changes)
-# ============================================================
-def _write_df_to_ppt_table(table, df: pd.DataFrame) -> None: 
-    """ Writes DF into an existing PPT table and forces ALL cell text to 12pt. """ 
-    if df is None: 
-        df = pd.DataFrame() 
-    n_rows = len(table.rows) 
-    n_cols = len(table.columns) 
-    # Clear body 
-    
-    for r in range(1, n_rows): 
-        for c in range(n_cols): 
-            table.cell(r, c).text = "" 
-    # Fill body 
-    if not df.empty: 
-        values = df.astype(str).replace({"nan": "-", "None": "-"}).values.tolist() 
-        max_write = max(0, n_rows - 1) 
-        for r in range(min(max_write, len(values))): 
-            row_vals = values[r] 
-            for c in range(min(n_cols, len(row_vals))): 
-                table.cell(r + 1, c).text = row_vals[c] 
-                
-    # Force 12pt everywhere (headers + body) 
-    for r in range(n_rows): 
-        for c in range(n_cols): 
-            cell = table.cell(r, c) 
-            if not cell.text_frame: 
-                continue 
-            for para in cell.text_frame.paragraphs: 
-                for run in para.runs: 
+
+def _find_tables(slide) -> List:
+    return [shp.table for shp in slide.shapes if getattr(shp, "has_table", False)]
+
+
+def _write_df_to_ppt_table(table, df: pd.DataFrame) -> None:
+    if df is None:
+        df = pd.DataFrame()
+
+    n_rows = len(table.rows)
+    n_cols = len(table.columns)
+
+    for r in range(1, n_rows):
+        for c in range(n_cols):
+            table.cell(r, c).text = ""
+
+    if not df.empty:
+        values = df.astype(str).replace({"nan": "-", "None": "-"}).values.tolist()
+        max_write = max(0, n_rows - 1)
+        for r in range(min(max_write, len(values))):
+            row_vals = values[r]
+            for c in range(min(n_cols, len(row_vals))):
+                table.cell(r + 1, c).text = row_vals[c]
+
+    for r in range(n_rows):
+        for c in range(n_cols):
+            cell = table.cell(r, c)
+            if not cell.text_frame:
+                continue
+            for para in cell.text_frame.paragraphs:
+                for run in para.runs:
                     run.font.size = Pt(12)
-                    
+
+
 TAKERS_LEFT_TABLE_SHAPE_NAME = "PH_takers_left"
 TAKERS_RIGHT_TABLE_SHAPE_NAME = "PH_takers_right"
 
@@ -468,7 +367,6 @@ def _find_table_shape_by_name(prs: Presentation, shape_name: str):
 
 
 def _fill_takers_tables(prs: Presentation, left_df: pd.DataFrame, right_df: pd.DataFrame) -> None:
-    # 1) Preferred: by explicit shape name (works regardless of slide order)
     left_tbl = _find_table_shape_by_name(prs, TAKERS_LEFT_TABLE_SHAPE_NAME)
     right_tbl = _find_table_shape_by_name(prs, TAKERS_RIGHT_TABLE_SHAPE_NAME)
 
@@ -477,7 +375,6 @@ def _fill_takers_tables(prs: Presentation, left_df: pd.DataFrame, right_df: pd.D
     if right_tbl is not None:
         _write_df_to_ppt_table(right_tbl, right_df)
 
-    # 2) Backward-compatible fallback: old behavior if names not found
     if left_tbl is None and len(prs.slides) >= 1:
         t1 = _find_tables(prs.slides[0])
         if t1:
@@ -488,9 +385,14 @@ def _fill_takers_tables(prs: Presentation, left_df: pd.DataFrame, right_df: pd.D
         if t2:
             _write_df_to_ppt_table(t2[0], right_df)
 
-# ============================================================
-# Public API
-# ============================================================
+
+def _flatten_images_by_shape_name(images_by_shape_name: Optional[Dict[int, Dict[str, bytes]]]) -> Dict[str, bytes]:
+    flat: Dict[str, bytes] = {}
+    for _slide_idx, mapping in (images_by_shape_name or {}).items():
+        for shape_name, img_bytes in (mapping or {}).items():
+            flat[shape_name] = img_bytes
+    return flat
+
 
 @dataclass(frozen=True)
 class FilledPptPayload:
@@ -511,11 +413,6 @@ def fill_corner_template_pptx(
     left_takers_df: pd.DataFrame,
     right_takers_df: pd.DataFrame,
 ) -> FilledPptPayload:
-    """
-    FIXES:
-      - Crops Att. Corners Left plot (PH_Corners_left_positions_vis) BEFORE placing.
-      - Prevents token-based overwrites for plots that are filled via SHAPE NAME.
-    """
     if not os.path.exists(template_pptx_path):
         raise FileNotFoundError(f"Template not found: {template_pptx_path}")
 
@@ -526,7 +423,6 @@ def fill_corner_template_pptx(
     base_repl = dict(meta_replacements or {})
     base_repl.setdefault("{TEAM_NAME}", team_name)
 
-    # If you fill by shape name, skip these tokens so they can't overwrite images.
     token_to_named = {
         "{Corners_left_positions_vis}": "PH_Corners_left_positions_vis",
         "{Corners_right_positions_vis}": "PH_Corners_right_positions_vis",
@@ -534,23 +430,9 @@ def fill_corner_template_pptx(
         "{Corners_right_shots_vis}": "PH_Corners_right_shots_vis",
     }
 
-    for slide_idx, slide in enumerate(prs.slides):
-        _set_slide_background(slide, bg_hex=team_secondary_hex)
-        _color_background_rectangles(slide, bg_hex=team_secondary_hex, slide_w=slide_w, slide_h=slide_h)
-        _color_top_and_bottom_bars(slide, bar_hex=team_primary_hex, slide_w=slide_w, slide_h=slide_h)
-        for shp, *_ in iter_shapes_mapped(slide):
-            _replace_text_in_shape(shp, base_repl)
-
-        # logo (token-based)
-        if logo_path and os.path.exists(logo_path):
-            with open(logo_path, "rb") as f:
-                logo_bytes = f.read()
-            _fill_token_with_images(slide, "{LOGO}", [logo_bytes], exact=True)
-
-        # 1) Named placeholders (authoritative)
     remaining_named = _flatten_images_by_shape_name(images_by_shape_name)
 
-    for slide_idx, slide in enumerate(prs.slides):
+    for slide in prs.slides:
         _set_slide_background(slide, bg_hex=team_secondary_hex)
         _color_background_rectangles(slide, bg_hex=team_secondary_hex, slide_w=slide_w, slide_h=slide_h)
         _color_top_and_bottom_bars(slide, bar_hex=team_primary_hex, slide_w=slide_w, slide_h=slide_h)
@@ -563,7 +445,6 @@ def fill_corner_template_pptx(
                 logo_bytes = f.read()
             _fill_token_with_images(slide, "{LOGO}", [logo_bytes], exact=True)
 
-        # 1) Named placeholders (robust: by shape name across all slides)
         replaced_shape_names: set[str] = set()
         for shape_name, img_bytes in list(remaining_named.items()):
             hit = _find_shape_by_name_mapped(slide, shape_name)
@@ -578,7 +459,6 @@ def fill_corner_template_pptx(
             replaced_shape_names.add(shape_name)
             remaining_named.pop(shape_name, None)
 
-        # 2) Token placeholders (ONLY for not-renamed items)
         for token, imgs in (images_by_token or {}).items():
             if token in ("{top_bar}", "{bottom_bar}", "{middle_bar}"):
                 continue
@@ -587,15 +467,18 @@ def fill_corner_template_pptx(
             if mapped_name and mapped_name in replaced_shape_names:
                 continue
 
-            _fill_token_with_images(slide, token, imgs, exact=True)
+            # ✅ KEY FIX: these two tokens are often not an exact match in PPT runs
+            if token in ("{att_corners_headers}", "{def_corners_headers}"):
+                _fill_token_with_images(slide, token, imgs, exact=False)
+            else:
+                _fill_token_with_images(slide, token, imgs, exact=True)
 
-        # Clear bar tokens
         for tok in ("{top_bar}", "{middle_bar}", "{bottom_bar}"):
             for shp, *_ in _find_shapes_with_token(slide, tok):
                 _clear_token_text(shp, tok)
-    # tables
+
     _fill_takers_tables(prs, left_takers_df, right_takers_df)
-    
+
     out = io.BytesIO()
     prs.save(out)
 

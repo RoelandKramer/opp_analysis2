@@ -606,12 +606,7 @@ d# ============================================================
 # file: opp_analysis_new.py
 # replace ENTIRE process_corner_data with this version
 # ============================================================
-from __future__ import annotations
 
-from collections import Counter, defaultdict
-from typing import Any, Dict, List, Optional, Tuple
-
-import pandas as pd
 
 ShotMap = Dict[Tuple[str, str], bool]  # (match_id, corner_sequence_id) -> has_shot
 

@@ -43,16 +43,15 @@ CROP_BY_SHAPE_NAME: Dict[str, CropSpec] = {
     # top=0.0230, bottom=0.0230
     # ------------------
     "PH_Corners_left_positions_vis": CropSpec(
-        left=0.0104,
-        top=0.0230,
-        bottom=0.0230,
-    ),
-    "PH_Corners_right_positions_vis": CropSpec(
-        left=0.0104,
-        right=0.0700,
-        top=0.0230,
-        bottom=0.0230,
-    ),
+        left=0.0104, 
+        top=0.1730, 
+        bottom=0.0230)
+    
+    ,
+    "PH_Corners_right_positions_vis": CropSpec(left=0.0104, 
+           right=0.0700, 
+           top=0.1217, 
+           bottom=0.2993),
 
     # ------------------
     # Shots + defensive plots: crop bottom so height 1.75 -> 1.31

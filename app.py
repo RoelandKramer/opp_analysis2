@@ -720,7 +720,7 @@ n_last = st.slider(
     key="n_last",
 )
 
-_render_shot_debug_panel(json_data_full, st.session_state.selected_team, n_last)
+# _render_shot_debug_panel(json_data_full, st.session_state.selected_team, n_last)
 
 generate = st.button("Generate corner analysis", type="primary", width="stretch")
 if generate:

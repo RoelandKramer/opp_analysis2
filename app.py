@@ -12,7 +12,7 @@ import zipfile
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, Optional, Tuple, List
+from typing import Dict, Optional, Tuple, List, Any
 
 import matplotlib as mpl
 import pandas as pd
@@ -51,14 +51,13 @@ st.set_page_config(page_title="Opponent Analysis - Set Pieces", layout="wide")
 APP_BG = "#FFFFFF"
 TEMPLATE_PPTX = "template_opp_analysis.pptx"  # keep in repo root
 
-# Data root per app
 DATA_ROOT = Path(os.getenv("APP_DATA_ROOT", "data"))
 CORNER_EVENTS_CSV = str(DATA_ROOT / "corner_events_all_matches.csv")
 EVENTS_SEQ_CSV = str(DATA_ROOT / "corner_events_full_sequences.csv")
 HEADERS_CSV = str(DATA_ROOT / "corner_positions_headers.csv")
 
-# Cache busting for changes that st.cache_data can't see (monkeypatch / dataset switch)
-CANON_PATCH_VERSION = "v1"
+# Cache busting (covers dataset switch + canon monkeypatch)
+CANON_PATCH_VERSION = "v2"  # bump if you change canon/shot fallback logic
 DATASET_ID = f"{DATA_ROOT.resolve()}::{CANON_PATCH_VERSION}"
 
 if st.session_state.get("dataset_id") != DATASET_ID:
@@ -68,7 +67,7 @@ if st.session_state.get("dataset_id") != DATASET_ID:
     st.cache_data.clear()
 
 if "analysis_cache" not in st.session_state:
-    st.session_state.analysis_cache = {}  # key: (dataset_id, dataset_version, team, n_last) -> dict
+    st.session_state.analysis_cache = {}  # key: (dataset_id, dataset_version, team, n_last)
 
 
 @dataclass(frozen=True)
@@ -121,6 +120,8 @@ def build_team_themes() -> Dict[str, TeamTheme]:
         "NAC Breda W": TeamTheme("#282828", "#FFDD25", "logos/nac_breda.png"),
         "Feyenoord W": TeamTheme("#FF0000", "#000000", "logos/feyenoord.png"),
         "PEC Zwolle W": TeamTheme("#1E59AE", "#6AC2EE", "logos/pec_zwolle.png"),
+        # Dataset has uppercase variant
+        "PEC ZWOLLE W": TeamTheme("#1E59AE", "#6AC2EE", "logos/pec_zwolle.png"),
     }
 
 
@@ -314,7 +315,7 @@ def _render_header(
             position: relative; width: 100%; border-radius: 18px; overflow: hidden;
             margin: 0.15rem 0 1.0rem 0; box-shadow: 0 10px 28px rgba(0,0,0,0.14);
           }}
-          .team-banner-top {{ background: {primary_hex}; padding: 2.0rem 1.4rem 1.7rem 1.4rem; }}
+          .team-banner-top {{ background: {primary_hex}; padding: 1.2rem 1.4rem 0.95rem 1.4rem; }}
           .team-banner-bottom {{
             background: {secondary_hex}; padding: 0.55rem 1.4rem 0.4rem 1.4rem;
             min-height: 52px; display: flex; align-items: flex-end;
@@ -323,7 +324,7 @@ def _render_header(
           .team-subtitle {{ margin: 0.35rem 0 0 0; color: {subtitle_color}; font-size: 1.05rem; font-weight: 750; }}
           .team-meta {{ margin: 0; color: #000000; font-size: 0.98rem; font-weight: 800; }}
           .team-logo {{
-            position: absolute; top: 16px; right: 16px; height: 74px; width: 74px; object-fit: contain;
+            position: absolute; top: 12px; right: 16px; height: 74px; width: 74px; object-fit: contain;
             background: rgba(255,255,255,0.92); border-radius: 16px; padding: 9px;
           }}
         </style>
@@ -342,12 +343,71 @@ def _render_header(
     )
 
 
+def _is_shot_like(ev: Dict[str, Any]) -> bool:
+    if ev.get("shotTypeId") is not None or ev.get("shotTypeName") is not None:
+        return True
+    rn = str(ev.get("resultName") or "").strip().lower()
+    if rn in {"shot", "goal", "own goal"}:
+        return True
+    labels = ev.get("labels")
+    if isinstance(labels, list):
+        s = " ".join(str(x) for x in labels).lower()
+        if "shot" in s or "goal" in s:
+            return True
+    return False
+
+
+def _corner_side_left_right(ev: Dict[str, Any]) -> Optional[str]:
+    """
+    Best-effort fallback when OA's shot parsing yields 0.
+    For corner events, startPosYM tends to be near one sideline; split by midline.
+    """
+    y = ev.get("startPosYM")
+    try:
+        yv = float(y)
+    except Exception:
+        return None
+    return "left" if yv < 34.0 else "right"
+
+
+def _fallback_attacking_shots(json_data_view: dict, selected_team: str) -> Dict[str, Tuple[int, int, float]]:
+    team_raw = (selected_team or "").strip()
+    team_canon = oa.get_canonical_team(team_raw) or team_raw
+
+    tot = {"left": 0, "right": 0}
+    shots = {"left": 0, "right": 0}
+
+    for m in (json_data_view.get("matches", []) or []):
+        for ev in (m.get("corner_events", []) or []):
+            tn_raw = str(ev.get("teamName") or "").strip()
+            tn_canon = oa.get_canonical_team(tn_raw) or tn_raw
+            if tn_canon != team_canon:
+                continue
+
+            side = _corner_side_left_right(ev)
+            if side is None:
+                continue
+
+            tot[side] += 1
+            if _is_shot_like(ev):
+                shots[side] += 1
+
+    out: Dict[str, Tuple[int, int, float]] = {}
+    for side in ("left", "right"):
+        t = tot[side]
+        s = shots[side]
+        pct = (s / t * 100.0) if t > 0 else 0.0
+        out[side] = (t, s, pct)
+    return out
+
+
 def _generate_filled_pptx(
     *,
     json_data_full: dict,
     selected_team: str,
     n_last: int,
     themes: Dict[str, TeamTheme],
+    matches_analyzed_total: int,
 ) -> Tuple[bytes, str]:
     matches_full = json_data_full.get("matches", []) or []
     team_matches_sorted = sorted(
@@ -377,6 +437,18 @@ def _generate_filled_pptx(
     results = cached["results"]
     league_stats = cached["league_stats"]
     viz_config = cached["viz_config"]
+
+    # --- Fix "0/X shots" issue: OA sometimes returns 0 shots for women datasets.
+    # If totals > 0 but shots are 0 on both sides, fall back to shot detection via shotTypeId/resultName/labels.
+    try:
+        tot_L, shot_L, _pct_L = results["attacking_shots"]["left"]
+        tot_R, shot_R, _pct_R = results["attacking_shots"]["right"]
+        if (tot_L + tot_R) > 0 and (shot_L + shot_R) == 0:
+            fallback = _fallback_attacking_shots(json_data_view, selected_team)
+            results["attacking_shots"]["left"] = fallback["left"]
+            results["attacking_shots"]["right"] = fallback["right"]
+    except Exception:
+        pass
 
     theme = _theme_for_team(themes, selected_team)
     set_matplotlib_bg("#FFFFFF")
@@ -460,10 +532,14 @@ def _generate_filled_pptx(
         "{def_corners_headers}": [fig_to_png_bytes_labels(fig_def_headers)] if fig_def_headers is not None else [],
     }
 
+    # Template tokens (you added {middle_bar}; treat it like {bottom_bar})
     meta = {
         "{TEAM_NAME}": selected_team,
         "{nlc}": str(results.get("own_left_count", 0)),
         "{nrc}": str(results.get("own_right_count", 0)),
+        "{MATCHES_ANALYZED}": str(matches_analyzed_total),
+        "{bottom_bar}": theme.rest_hex,
+        "{middle_bar}": theme.rest_hex,
     }
 
     payload = fill_corner_template_pptx(
@@ -528,6 +604,16 @@ if show_matches_used:
     st.write(f"Matches used: {len(df_used)}")
     st.dataframe(df_used[["match_name"]], use_container_width=True, hide_index=True)
 
+theme = _theme_for_team(themes, selected_team)
+_render_header(
+    team=selected_team,
+    primary_hex=theme.top_hex,
+    secondary_hex=theme.rest_hex,
+    logo_path=theme.logo_relpath,
+    window_label=window_label,
+    matches_analyzed=team_total,
+)
+
 st.divider()
 
 st.subheader("Add data")
@@ -581,7 +667,6 @@ if run_update:
             st.session_state.analysis_cache = {}
             st.cache_data.clear()
             st.rerun()
-
         else:
             st.error(f"❌ Update failed: {result.get('error', 'Unknown error')}")
             st.write(result)
@@ -593,16 +678,7 @@ st.caption(
     else "Latest match in dataset: -"
 )
 
-theme = _theme_for_team(themes, selected_team)
-_render_header(
-    team=selected_team,
-    primary_hex=theme.top_hex,
-    secondary_hex=theme.rest_hex,
-    logo_path=theme.logo_relpath,
-    window_label=window_label,
-    matches_analyzed=None,
-)
-
+# Bottom fixed button
 st.markdown(
     """
     <div class="fixed-bottom">
@@ -632,6 +708,7 @@ if generate:
             selected_team=selected_team,
             n_last=n_last,
             themes=themes,
+            matches_analyzed_total=team_total,
         )
 
     st.success("✅ PowerPoint generated.")

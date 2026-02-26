@@ -451,7 +451,8 @@ def _write_df_to_ppt_table(table, df: pd.DataFrame) -> None:
     if not df.empty: 
         values = df.astype(str).replace({"nan": "-", "None": "-"}).values.tolist() 
         max_write = max(0, n_rows - 1) 
-        for r in range(min(max_write, len(values))): row_vals = values[r] 
+        for r in range(min(max_write, len(values))): 
+            row_vals = values[r] 
             for c in range(min(n_cols, len(row_vals))): 
                 table.cell(r + 1, c).text = row_vals[c] 
                 

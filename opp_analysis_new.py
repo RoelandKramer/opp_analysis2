@@ -587,10 +587,32 @@ def _assign_zone(ex: float, ey: float, zones: Dict[str, List[Tuple[float, float]
             return n
     return None
 
-
 def _sequence_has_shot(seq: List[Dict[str, Any]]) -> bool:
-    return any(ev.get("baseTypeName") == "SHOT" or _safe_int(ev.get("baseTypeId"), -1) == 6 for ev in seq)
+    for ev in seq or []:
+        bt = str(ev.get("baseTypeName") or "").strip().upper()
+        if bt == "SHOT":
+            return True
 
+        if _safe_int(ev.get("baseTypeId"), -1) == 6:
+            return True
+
+        # extra strong signal in many feeds
+        if ev.get("shotTypeId") is not None or str(ev.get("shotTypeName") or "").strip():
+            return True
+
+        rn = str(ev.get("resultName") or "").strip().upper()
+        if rn in {"WIDE", "ON_TARGET", "OFF_TARGET", "GOAL", "SAVED", "BLOCKED"}:
+            return True
+        if "SHOT" in rn or "GOAL" in rn:
+            return True
+
+        labels = ev.get("labels")
+        if isinstance(labels, list):
+            s = " ".join(str(x) for x in labels).upper()
+            if "SHOT" in s or "GOAL" in s:
+                return True
+
+    return False
 
 def _valid_zone_for_shot_lists(zone_val: Any) -> bool:
     return bool(zone_val and str(zone_val).strip() and zone_val != "Short_Corner_Zone")
@@ -749,9 +771,11 @@ def process_corner_data(json_data: Dict[str, Any], selected_team_name: str) -> D
         sequences_by_id = defaultdict(list)
 
         for ev in events:
-            if ev.get("sequenceId") is not None:
-                sequences_by_id[ev["sequenceId"]].append(ev)
-
+            sid = ev.get("sequenceId")
+            if sid is None:
+                continue
+            sequences_by_id[str(sid)].append(ev)
+            
         for e in events:
             if not _is_true_corner_start(e):
                 continue
@@ -776,8 +800,8 @@ def process_corner_data(json_data: Dict[str, Any], selected_team_name: str) -> D
             e["zone"], e["corner_side"] = zone_end, e_side
         
             seq_id = e.get("sequenceId")
-            seq_has_shot = _sequence_has_shot(sequences_by_id.get(seq_id, [])) if (seq_id is not None) else False
-            e["seq_has_shot"] = bool(seq_has_shot)
+            seq_events = sequences_by_id.get(str(seq_id), []) if seq_id is not None else []
+            seq_has_shot = _sequence_has_shot(seq_events) if seq_events else _sequence_has_shot([e])
 
             if e_side == "left":
                 (own_left_side if is_own else opponent_left_side).append(e)
@@ -801,7 +825,7 @@ def process_corner_data(json_data: Dict[str, Any], selected_team_name: str) -> D
         total_zone = Counter([c["zone"] for c in opp_corners if _valid_zone_for_shot_lists(c.get("zone"))])
         shot_seq_ids = defaultdict(set)
         for seq in opp_shot_seqs:
-            start = next((x for x in seq if x.get("sequenceStart")), seq[0])
+            start = next((x for x in seq if truthy(x.get("sequenceStart"))), seq[0])
             if start.get("corner_side") == side_filter:
                 shot_seq_ids[start.get("zone")].add(start.get("sequenceId"))
         pct = {z: (len(shot_seq_ids[z]) / t) * 100 for z, t in total_zone.items() if t > 0}
@@ -859,8 +883,10 @@ def compute_league_attacking_corner_shot_rates(json_data: Dict[str, Any]) -> Dic
 
         sequences_by_id = defaultdict(list)
         for ev in events:
-            if ev.get("sequenceId") is not None:
-                sequences_by_id[ev["sequenceId"]].append(ev)
+            sid = ev.get("sequenceId")
+            if sid is None:
+                continue
+            sequences_by_id[str(sid)].append(ev)
 
         for e in events:
             if not _is_true_corner_start(e):
@@ -893,9 +919,9 @@ def compute_league_attacking_corner_shot_rates(json_data: Dict[str, Any]) -> Dic
             if corner_key in seen_corner_keys:
                 continue
             seen_corner_keys.add(corner_key)
+            seq_events = sequences_by_id.get(str(seq_id), []) if seq_id is not None else []
 
-            seq_has_shot = _sequence_has_shot(sequences_by_id.get(seq_id, [])) if (seq_id is not None) else False
-
+            seq_has_shot = _sequence_has_shot(seq_events) if seq_events else _sequence_has_shot([e])
             bucket = _ensure_bucket(team, side, zone_end)
             bucket["total"] = int(bucket["total"]) + 1
             if seq_has_shot:

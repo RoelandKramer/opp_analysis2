@@ -602,26 +602,54 @@ def _calc_attacking_shot_stats(corners: List[Dict[str, Any]]):
 # file: opp_analysis_new.py
 # replace ENTIRE process_corner_data with this version
 # ============================================================
+d# ============================================================
+# file: opp_analysis_new.py
+# replace ENTIRE process_corner_data with this version
+# ============================================================
+from __future__ import annotations
+
+from collections import Counter, defaultdict
+from typing import Any, Dict, List, Optional, Tuple
+
+import pandas as pd
+
+ShotMap = Dict[Tuple[str, str], bool]  # (match_id, corner_sequence_id) -> has_shot
+
+
+def _pick_corner_sequence_id(ev: Dict[str, Any]) -> Optional[str]:
+    """
+    Prefer a per-corner grouping id if present. Fallback to sequenceId.
+    """
+    for k in ("corner_sequence_id", "corner_sequenceId", "cornerSequenceId", "cornerSequence_id"):
+        v = ev.get(k)
+        if v is not None and str(v).strip():
+            return str(v).strip()
+    v = ev.get("sequenceId")
+    return str(v).strip() if v is not None and str(v).strip() else None
+
+
 def process_corner_data(
     json_data: Dict[str, Any],
     selected_team_name: str,
     *,
-    shot_map: Optional[Dict[Tuple[str, str], bool]] = None,
+    shot_map: Optional[ShotMap] = None,
 ) -> Dict[str, Any]:
-    matches = json_data.get("matches", [])
-    opponent_left_side, opponent_right_side = [], []
-    own_left_side, own_right_side = [], []
+    matches = json_data.get("matches", []) or []
+
+    opponent_left_side: List[Dict[str, Any]] = []
+    opponent_right_side: List[Dict[str, Any]] = []
+    own_left_side: List[Dict[str, Any]] = []
+    own_right_side: List[Dict[str, Any]] = []
     opponent_seq_with_shot: List[List[Dict[str, Any]]] = []
     used_match_rows: List[Dict[str, Any]] = []
 
     used_matches = 0
-    _seen_seq_keys = set()
+    seen_corner_keys: set[Tuple[str, str, bool]] = set()  # (match_id, corner_seq_id, is_own)
 
-    # normalize shot_map keys to (match_id:str, seqId_norm:str)
     shot_map = shot_map or {}
 
     for match in matches:
-        events = match.get("corner_events", [])
+        events = match.get("corner_events", []) or []
         if not events:
             continue
 
@@ -643,15 +671,16 @@ def process_corner_data(
         )
         used_matches += 1
 
-        TOP_X, BOTTOM_X, LEFT_Y, RIGHT_Y = _resolve_pitch_bounds(match, events)
-        zones_TL, zones_BR, zones_TR, zones_BL = build_zones(TOP_X, BOTTOM_X, LEFT_Y, RIGHT_Y)
+        top_x, bottom_x, left_y, right_y = _resolve_pitch_bounds(match, events)
+        zones_tl, zones_br, zones_tr, zones_bl = build_zones(top_x, bottom_x, left_y, right_y)
 
-        sequences_by_id = defaultdict(list)
+        sequences_by_id: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
         for ev in events:
-            if ev.get("sequenceId") is not None:
-                sequences_by_id[ev["sequenceId"]].append(ev)
+            sid = _norm_seq_id(ev.get("sequenceId"))
+            if sid is not None:
+                sequences_by_id[sid].append(ev)
 
-        match_id = str(match.get("match_id") or "")
+        match_id = str(match.get("match_id") or "").strip()
 
         for e in events:
             if not _is_true_corner_start(e):
@@ -664,82 +693,83 @@ def process_corner_data(
             if None in (sx, sy, ex, ey):
                 continue
 
-            corner_type = get_corner(float(sx), float(sy), TOP_X, LEFT_Y)
+            corner_type = get_corner(float(sx), float(sy), top_x, left_y)
             if not corner_type:
                 continue
 
             if corner_type in ("top_left", "bottom_right"):
-                local_zones, e_side = (zones_TL if corner_type == "top_left" else zones_BR), "left"
+                local_zones, e_side = (zones_tl if corner_type == "top_left" else zones_br), "left"
             else:
-                local_zones, e_side = (zones_TR if corner_type == "top_right" else zones_BL), "right"
+                local_zones, e_side = (zones_tr if corner_type == "top_right" else zones_bl), "right"
 
-            zone_end = _assign_zone(float(ex), float(ey), local_zones) or _assign_zone(
-                -float(ex), -float(ey), local_zones
-            )
-            e["zone"], e["corner_side"] = zone_end, e_side
+            zone_end = _assign_zone(float(ex), float(ey), local_zones) or _assign_zone(-float(ex), -float(ey), local_zones)
+            e["zone"] = zone_end
+            e["corner_side"] = e_side
 
-            match_id = str(match.get("match_id") or "").strip()
-            
-            # --- always define seq_id for downstream grouping ---
-            seq_id = e.get("sequenceId")
-            
-            # ✅ Prefer corner_sequence_id for "corner -> shot"
-            corner_seq = e.get("corner_sequence_id")
-            if corner_seq is None:
-                corner_seq = e.get("corner_sequenceId")
-            if corner_seq is None:
-                corner_seq = seq_id
-            
-            corner_seq_s = str(corner_seq).strip() if corner_seq is not None else ""
-            
-            # Source of truth: full_sequences shot_map (match_id, corner_sequence_id)
-            if shot_map and match_id and corner_seq_s:
-                seq_has_shot = bool(shot_map.get((match_id, corner_seq_s), False))
+            seq_id = _norm_seq_id(e.get("sequenceId"))
+            corner_seq_id = _pick_corner_sequence_id(e)
+            corner_seq_id = corner_seq_id if corner_seq_id is not None else seq_id
+
+            # Source of truth: full_sequences shot_map keyed by (match_id, corner_seq_id)
+            if match_id and corner_seq_id:
+                seq_has_shot = bool(shot_map.get((match_id, corner_seq_id), False))
             else:
-                # Fallback: detect shot inside same sequenceId in corner_events
-                seq_has_shot = _sequence_has_shot(sequences_by_id.get(seq_id, [])) if (seq_id is not None) else False
-            
+                seq_has_shot = False
+
+            # Fallback if shot_map misses: detect shot inside same sequenceId from corner_events
+            if not seq_has_shot and seq_id:
+                seq_has_shot = _sequence_has_shot(sequences_by_id.get(seq_id, []))
+
             e["seq_has_shot"] = bool(seq_has_shot)
-            
-            # append corners to left/right lists (your existing code)
+
             if e_side == "left":
                 (own_left_side if is_own else opponent_left_side).append(e)
             else:
                 (own_right_side if is_own else opponent_right_side).append(e)
-            
-            # --- use seq_id safely now ---
-            if seq_id is not None:
-                seq_evs = sequences_by_id.get(seq_id, [])
-                if not seq_evs:
-                    continue
-            
-                key = (match_id, corner_seq_s, is_own)
-                if key not in _seen_seq_keys:
-                    _seen_seq_keys.add(key)
-            
-                    for sev in seq_evs:
-                        sev["zone"], sev["corner_side"] = zone_end, e_side
-            
-                    if (not is_own) and seq_has_shot and _valid_zone_for_shot_lists(zone_end):
-                        opponent_seq_with_shot.append(seq_evs)     
-                        
-    def _calc_defensive_stats(opp_corners: List[Dict[str, Any]], opp_shot_seqs: List[List[Dict[str, Any]]], side_filter: str):
-        total_zone = Counter([c["zone"] for c in opp_corners if _valid_zone_for_shot_lists(c.get("zone"))])
+
+            # Build opponent shot sequences list (for defensive viz)
+            if not seq_id:
+                continue
+
+            key = (match_id, corner_seq_id or seq_id, is_own)
+            if key in seen_corner_keys:
+                continue
+            seen_corner_keys.add(key)
+
+            seq_evs = sequences_by_id.get(seq_id, [])
+            if not seq_evs:
+                continue
+
+            for sev in seq_evs:
+                sev["zone"] = zone_end
+                sev["corner_side"] = e_side
+
+            if (not is_own) and seq_has_shot and _valid_zone_for_shot_lists(zone_end):
+                opponent_seq_with_shot.append(seq_evs)
+
+    def _calc_defensive_stats(
+        opp_corners: List[Dict[str, Any]],
+        opp_shot_seqs: List[List[Dict[str, Any]]],
+        side_filter: str,
+    ):
+        total_zone = Counter([c.get("zone") for c in opp_corners if _valid_zone_for_shot_lists(c.get("zone"))])
+
         shot_seq_ids = defaultdict(set)
         for seq in opp_shot_seqs:
-            start = next((x for x in seq if x.get("sequenceStart")), seq[0])
+            start = next((x for x in seq if truthy(x.get("sequenceStart"))), seq[0])
             if start.get("corner_side") == side_filter:
-                shot_seq_ids[start.get("zone")].add(start.get("sequenceId"))
-        pct = {z: (len(shot_seq_ids[z]) / t) * 100 for z, t in total_zone.items() if t > 0}
+                shot_seq_ids[start.get("zone")].add(_norm_seq_id(start.get("sequenceId")))
+
+        pct = {z: (len(shot_seq_ids[z]) / t) * 100.0 for z, t in total_zone.items() if t > 0}
         return total_zone, shot_seq_ids, pct
 
     def_left_tot, def_left_ids, def_left_pct = _calc_defensive_stats(opponent_left_side, opponent_seq_with_shot, "left")
     def_right_tot, def_right_ids, def_right_pct = _calc_defensive_stats(opponent_right_side, opponent_seq_with_shot, "right")
 
     def _zone_pcts(corners: List[Dict[str, Any]]):
-        c = Counter(e["zone"] for e in corners if e.get("zone"))
+        c = Counter(e.get("zone") for e in corners if e.get("zone"))
         tot = sum(c.values())
-        return {k: (v / tot) * 100 for k, v in c.items()} if tot else {}
+        return {k: (v / tot) * 100.0 for k, v in c.items()} if tot else {}
 
     taker_tables = _build_corner_taker_tables(own_left_side, own_right_side, min_corners=5)
     att_shots_left = _calc_attacking_shot_stats(own_left_side)
@@ -751,13 +781,15 @@ def process_corner_data(
         "own_right_count": len(own_right_side),
         "def_left_count": len(opponent_left_side),
         "def_right_count": len(opponent_right_side),
-        "defensive": {"left": (def_left_tot, def_left_ids, def_left_pct), "right": (def_right_tot, def_right_ids, def_right_pct)},
+        "defensive": {
+            "left": (def_left_tot, def_left_ids, def_left_pct),
+            "right": (def_right_tot, def_right_ids, def_right_pct),
+        },
         "attacking": {"left_pct": _zone_pcts(own_left_side), "right_pct": _zone_pcts(own_right_side)},
         "attacking_shots": {"left": att_shots_left, "right": att_shots_right},
         "tables": taker_tables,
         "used_matches_table": pd.DataFrame(used_match_rows),
     }
-
 def compute_league_attacking_corner_shot_rates(
     json_data: Dict[str, Any],
     *,

@@ -12,7 +12,7 @@ import zipfile
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, Optional, Tuple, List, Any
+from typing import Any, Dict, List, Optional, Tuple
 
 import matplotlib as mpl
 import pandas as pd
@@ -31,20 +31,21 @@ if "GITHUB_REPO" in st.secrets:
 os.environ["GITHUB_BRANCH"] = st.secrets.get("GITHUB_BRANCH", "main")
 
 
-# --- Canonicalization fallback for datasets unknown to OA (e.g., women teams) ---
+# --- Canonicalization fallback for datasets unknown to OA (women teams, etc.) ---
 _OA_GET_CANON = oa.get_canonical_team
 
 
-def _get_canonical_team_safe(name):
-    canon = _OA_GET_CANON(name)
+def _get_canonical_team_safe(name: Any) -> Optional[str]:
+    raw = str(name).strip() if name is not None else ""
+    if raw.upper() == "NOT_APPLICABLE":
+        return None
+    canon = _OA_GET_CANON(raw)
     if canon:
         return canon
-    s = str(name).strip() if name is not None else ""
-    return s or None
+    return raw or None
 
 
 oa.get_canonical_team = _get_canonical_team_safe
-
 
 st.set_page_config(page_title="Opponent Analysis - Set Pieces", layout="wide")
 
@@ -56,7 +57,7 @@ CORNER_EVENTS_CSV = str(DATA_ROOT / "corner_events_all_matches.csv")
 EVENTS_SEQ_CSV = str(DATA_ROOT / "corner_events_full_sequences.csv")
 HEADERS_CSV = str(DATA_ROOT / "corner_positions_headers.csv")
 
-CANON_PATCH_VERSION = "v3"
+CANON_PATCH_VERSION = "v4_fullseq_shots"
 DATASET_ID = f"{DATA_ROOT.resolve()}::{CANON_PATCH_VERSION}"
 
 if st.session_state.get("dataset_id") != DATASET_ID:
@@ -106,6 +107,7 @@ def build_team_themes() -> Dict[str, TeamTheme]:
         "VVV-Venlo": TeamTheme("#12100B", "#FEE000", "logos/vvv_venlo.png"),
         "Willem II": TeamTheme("#242C84", "#FFFFFF", "logos/willem_ii.png"),
         "Ajax W": TeamTheme("#C31F3D", "#FFFFFF", "logos/jong_ajax.png"),
+        "ADO Den Haag W": TeamTheme("#00802C", "#FFE200", "logos/ado_den_haag.png"),
         "Ado Den Haag W": TeamTheme("#00802C", "#FFE200", "logos/ado_den_haag.png"),
         "PSV W": TeamTheme("#E62528", "#FFFFFF", "logos/jong_psv.png"),
         "AZ W": TeamTheme("#DB0021", "#FFFFFF", "logos/jong_az.png"),
@@ -160,39 +162,78 @@ def get_img_path(key: str) -> Optional[str]:
 
 
 @st.cache_data
-def load_corner_jsonlike(csv_path: str, cache_buster: str):
+def load_corner_jsonlike(csv_path: str, cache_buster: str) -> dict:
     _ = cache_buster
     return oa.load_corner_events_csv_as_jsonlike(csv_path)
 
 
 @st.cache_data
-def get_analysis_results(json_data, team_name: str, cache_buster: str):
+def load_events_sequences(csv_path: str, cache_buster: str) -> pd.DataFrame:
     _ = cache_buster
-    return oa.process_corner_data(json_data, team_name)
+    return pd.read_csv(csv_path, low_memory=False).where(pd.notnull, None)
 
 
 @st.cache_data
-def get_league_stats(json_data, cache_buster: str):
+def load_headers(csv_path: str, cache_buster: str) -> pd.DataFrame:
     _ = cache_buster
-    return oa.compute_league_attacking_corner_shot_rates(json_data)
+    return oa.load_corner_positions_headers(csv_path)
 
 
 @st.cache_data
 def get_canonical_team_options(json_data_full: dict, cache_buster: str) -> List[str]:
     _ = cache_buster
     canon: set[str] = set()
-
     for match in (json_data_full.get("matches", []) or []):
         for ev in (match.get("corner_events", []) or []):
             raw_s = str(ev.get("teamName") or "").strip()
             if not raw_s or raw_s.upper() == "NOT_APPLICABLE":
                 continue
-
             c = oa.get_canonical_team(raw_s)
             if c:
                 canon.add(c)
-
     return sorted(canon)
+
+
+@st.cache_data
+def load_shot_map_from_full_sequences(seq_csv_path: str, cache_buster: str) -> Dict[Tuple[str, str], bool]:
+    """
+    (match_id, sequenceId) -> True if that sequence contains a shot event.
+    Source of truth for women shot detection.
+    """
+    _ = cache_buster
+    if not os.path.exists(seq_csv_path):
+        return {}
+
+    df = pd.read_csv(seq_csv_path, low_memory=False).where(pd.notnull, None)
+
+    if "match_id" not in df.columns:
+        return {}
+
+    seq_col = "sequenceId" if "sequenceId" in df.columns else ("corner_sequence_id" if "corner_sequence_id" in df.columns else None)
+    if seq_col is None:
+        return {}
+
+    bt_col = "baseTypeName" if "baseTypeName" in df.columns else None
+    bid_col = "baseTypeId" if "baseTypeId" in df.columns else None
+    if bt_col is None and bid_col is None:
+        return {}
+
+    df["match_id"] = df["match_id"].astype(str)
+    df[seq_col] = df[seq_col].astype(str)
+
+    is_shot = pd.Series(False, index=df.index)
+    if bt_col is not None:
+        is_shot |= df[bt_col].astype(str).str.strip().str.upper().eq("SHOT")
+    if bid_col is not None:
+        bid = pd.to_numeric(df[bid_col], errors="coerce")
+        is_shot |= bid.eq(6)
+
+    shot_rows = df.loc[is_shot, ["match_id", seq_col]].dropna()
+    out: Dict[Tuple[str, str], bool] = {}
+    for mid, sid in shot_rows.itertuples(index=False):
+        out[(str(mid), str(sid))] = True
+    return out
+
 
 def _match_dt(match: dict) -> datetime:
     dt = match.get("match_date")
@@ -298,7 +339,7 @@ def _render_header(
           .team-subtitle {{ margin: 0.35rem 0 0 0; color: {subtitle_color}; font-size: 1.05rem; font-weight: 750; }}
           .team-meta {{ margin: 0; color: #000000; font-size: 0.98rem; font-weight: 800; }}
           .team-logo {{
-            position: absolute; top: 6px; right: 16px; height: 74px; width: 74px; object-fit: contain;
+            position: absolute; top: 12px; right: 16px; height: 74px; width: 74px; object-fit: contain;
             background: rgba(255,255,255,0.92); border-radius: 16px; padding: 9px;
           }}
         </style>
@@ -324,6 +365,7 @@ def _generate_filled_pptx(
     n_last: int,
     themes: Dict[str, TeamTheme],
     matches_analyzed_total: int,
+    shot_map: Dict[Tuple[str, str], bool],
 ) -> Tuple[bytes, str]:
     matches_full = json_data_full.get("matches", []) or []
     team_matches_sorted = sorted(
@@ -340,8 +382,8 @@ def _generate_filled_pptx(
 
     cache_key = (st.session_state.dataset_id, st.session_state.dataset_version, selected_team, n_last)
     if cache_key not in st.session_state.analysis_cache:
-        results = get_analysis_results(json_data_view, selected_team, st.session_state.dataset_id)
-        league_stats = get_league_stats(json_data_full, st.session_state.dataset_id)
+        results = oa.process_corner_data(json_data_view, selected_team, shot_map=shot_map)
+        league_stats = oa.compute_league_attacking_corner_shot_rates(json_data_full, shot_map=shot_map)
         viz_config = oa.get_visualization_coords()
         st.session_state.analysis_cache[cache_key] = {
             "results": results,
@@ -406,8 +448,8 @@ def _generate_filled_pptx(
     fig_def_headers = None
     try:
         if os.path.exists(HEADERS_CSV) and os.path.exists(EVENTS_SEQ_CSV):
-            headers_df = oa.load_corner_positions_headers(HEADERS_CSV)
-            seq_df = pd.read_csv(EVENTS_SEQ_CSV, low_memory=False).where(pd.notnull, None)
+            headers_df = load_headers(HEADERS_CSV, st.session_state.dataset_id)
+            seq_df = load_events_sequences(EVENTS_SEQ_CSV, st.session_state.dataset_id)
             headers_df = oa.attach_actual_club_from_events(headers_df, seq_df)
             team_c = oa._canon_team(selected_team) or selected_team
             df_team = headers_df[headers_df["club_actual_canon"] == team_c].copy()
@@ -419,24 +461,20 @@ def _generate_filled_pptx(
 
     images_by_shape_name = {
         0: {
-            "PH_Corners_left_positions_vis": fig_to_png_bytes(fig_att_L),
-            "PH_Corners_right_positions_vis": fig_to_png_bytes(fig_att_R),
-            "PH_Corners_left_shots_vis": fig_to_png_bytes(fig_att_shots_L),
-            "PH_Corners_right_shots_vis": fig_to_png_bytes(fig_att_shots_R),
+            "PH_Corners_left_positions_vis": fig_to_png_bytes(fig_att_L, dpi=360),
+            "PH_Corners_right_positions_vis": fig_to_png_bytes(fig_att_R, dpi=360),
+            "PH_Corners_left_shots_vis": fig_to_png_bytes(fig_att_shots_L, dpi=360),
+            "PH_Corners_right_shots_vis": fig_to_png_bytes(fig_att_shots_R, dpi=360),
         },
         1: {
-            "PH_def_left": fig_to_png_bytes(fig_def_L),
-            "PH_def_right": fig_to_png_bytes(fig_def_R),
+            "PH_def_left": fig_to_png_bytes(fig_def_L, dpi=360),
+            "PH_def_right": fig_to_png_bytes(fig_def_R, dpi=360),
         },
     }
 
     images_by_token = {
-        "{att_corners_headers}": [fig_to_png_bytes_labels(fig_att_headers)] if fig_att_headers is not None else [],
-        "{def_corners_headers}": [fig_to_png_bytes_labels(fig_def_headers)] if fig_def_headers is not None else [],
-        "{Corners_left_shots_vis}": [fig_to_png_bytes(fig_att_shots_L)],
-        "{Corners_right_shots_vis}": [fig_to_png_bytes(fig_att_shots_R)],
-        "{def_Corner_left_shots_vis}": [fig_to_png_bytes(fig_def_L)],
-        "{def_Corner_right_shots_vis}": [fig_to_png_bytes(fig_def_R)],
+        "{att_corners_headers}": [fig_to_png_bytes_labels(fig_att_headers, dpi=360)] if fig_att_headers is not None else [],
+        "{def_corners_headers}": [fig_to_png_bytes_labels(fig_def_headers, dpi=360)] if fig_def_headers is not None else [],
     }
 
     meta = {
@@ -462,191 +500,7 @@ def _generate_filled_pptx(
     )
     return payload.pptx_bytes, payload.filename
 
-# ============================================================
-# file: app.py  (ADD THIS DEBUG HELPERS BLOCK)
-# ============================================================
-from collections import defaultdict, Counter
 
-def _norm_seq_id(x: Any) -> Optional[str]:
-    if x is None:
-        return None
-    s = str(x).strip()
-    return s if s else None
-
-def _is_shot_event(ev: Dict[str, Any]) -> bool:
-    bt = str(ev.get("baseTypeName") or "").strip().upper()
-    if bt == "SHOT":
-        return True
-    try:
-        if int(ev.get("baseTypeId")) == 6:
-            return True
-    except Exception:
-        pass
-    # fallback signals (women feeds sometimes differ)
-    if ev.get("shotTypeId") is not None or str(ev.get("shotTypeName") or "").strip():
-        return True
-    rn = str(ev.get("resultName") or "").strip().upper()
-    if "SHOT" in rn or "GOAL" in rn:
-        return True
-    if rn in {"WIDE", "SAVED", "BLOCKED", "ON_TARGET", "OFF_TARGET", "GOAL"}:
-        return True
-    labels = ev.get("labels")
-    if isinstance(labels, list):
-        s = " ".join(str(x) for x in labels).upper()
-        if "SHOT" in s or "GOAL" in s:
-            return True
-    return False
-
-def _corner_start_truthy(ev: Dict[str, Any]) -> bool:
-    # mirrors oa._is_true_corner_start but independent
-    if ev.get("possessionTypeName") != "CORNER":
-        return False
-    v = ev.get("sequenceStart")
-    if v is True:
-        return True
-    if isinstance(v, (int, float)) and v == 1:
-        return True
-    if isinstance(v, str) and v.strip().lower() in {"true", "1", "yes"}:
-        return True
-    return False
-
-def _team_matches(json_data_full: dict, team: str) -> List[dict]:
-    matches = json_data_full.get("matches", []) or []
-    out = []
-    for m in matches:
-        evs = m.get("corner_events", []) or []
-        teams_in_match = set()
-        for ev in evs:
-            t = oa.get_canonical_team(ev.get("teamName"))
-            if t:
-                teams_in_match.add(t)
-        if team in teams_in_match:
-            out.append(m)
-    return out
-
-def _render_shot_debug_panel(json_data_full: dict, selected_team: str, n_last: int) -> None:
-    with st.expander("🧪 Debug: why are shots from corners = 0?", expanded=True):
-        matches = _team_matches(json_data_full, selected_team)
-        matches_sorted = sorted(matches, key=lambda m: m.get("match_date") or datetime.min, reverse=True)
-        window = matches_sorted[: max(1, int(n_last or 1))]
-
-        st.write("Selected team:", selected_team)
-        st.write("Matches for team:", len(matches), "| Window:", len(window))
-
-        rows = []
-        examples = []
-
-        for m in window:
-            evs = m.get("corner_events", []) or []
-            mid = str(m.get("match_id", ""))
-            mname = m.get("match_name", "")
-
-            # team corners (corner starts)
-            team_corner_starts = [
-                ev for ev in evs
-                if (oa.get_canonical_team(ev.get("teamName")) == selected_team)
-                and _corner_start_truthy(ev)
-            ]
-
-            # all shot events in match
-            shot_events = [ev for ev in evs if _is_shot_event(ev)]
-
-            # seqId typing / normalization diagnostics
-            corner_seq_raw_types = Counter(type(ev.get("sequenceId")).__name__ for ev in team_corner_starts)
-            shot_seq_raw_types = Counter(type(ev.get("sequenceId")).__name__ for ev in shot_events)
-
-            corner_seq_raw = [ev.get("sequenceId") for ev in team_corner_starts if ev.get("sequenceId") is not None]
-            shot_seq_raw = [ev.get("sequenceId") for ev in shot_events if ev.get("sequenceId") is not None]
-
-            corner_seq_norm = set(_norm_seq_id(x) for x in corner_seq_raw)
-            shot_seq_norm = set(_norm_seq_id(x) for x in shot_seq_raw)
-            corner_seq_norm.discard(None)
-            shot_seq_norm.discard(None)
-
-            # intersection: do we have a shot in same sequence as a corner start?
-            intersect_norm = corner_seq_norm.intersection(shot_seq_norm)
-
-            # also check raw intersection (often fails if types differ)
-            intersect_raw = set(map(str, corner_seq_raw)).intersection(set(map(str, shot_seq_raw))) if corner_seq_raw and shot_seq_raw else set()
-
-            # gather a couple examples where there SHOULD be a hit
-            if intersect_norm and len(examples) < 6:
-                sid = next(iter(intersect_norm))
-                # pick one corner + one shot from that sequence
-                c_ex = next((ev for ev in team_corner_starts if _norm_seq_id(ev.get("sequenceId")) == sid), None)
-                s_ex = next((ev for ev in shot_events if _norm_seq_id(ev.get("sequenceId")) == sid), None)
-                examples.append(
-                    {
-                        "match_name": mname,
-                        "seq_id_norm": sid,
-                        "corner_baseTypeName": (c_ex or {}).get("baseTypeName"),
-                        "corner_baseTypeId": (c_ex or {}).get("baseTypeId"),
-                        "corner_sequenceId": (c_ex or {}).get("sequenceId"),
-                        "corner_sequenceStart": (c_ex or {}).get("sequenceStart"),
-                        "shot_baseTypeName": (s_ex or {}).get("baseTypeName"),
-                        "shot_baseTypeId": (s_ex or {}).get("baseTypeId"),
-                        "shot_resultName": (s_ex or {}).get("resultName"),
-                        "shot_sequenceId": (s_ex or {}).get("sequenceId"),
-                        "shot_labels": (s_ex or {}).get("labels"),
-                    }
-                )
-
-            rows.append(
-                {
-                    "match_id": mid,
-                    "match_name": mname,
-                    "events": len(evs),
-                    "team_corner_starts": len(team_corner_starts),
-                    "match_shot_events": len(shot_events),
-                    "corner_seq_types": dict(corner_seq_raw_types),
-                    "shot_seq_types": dict(shot_seq_raw_types),
-                    "corner_seq_unique": len(corner_seq_norm),
-                    "shot_seq_unique": len(shot_seq_norm),
-                    "corner∩shot_seq_norm": len(intersect_norm),
-                    "corner∩shot_seq_raw_str": len(intersect_raw),
-                }
-            )
-
-        df = pd.DataFrame(rows)
-        st.dataframe(df, width="stretch", hide_index=True)
-
-        total_corner_starts = int(df["team_corner_starts"].sum()) if not df.empty else 0
-        total_shots_in_matches = int(df["match_shot_events"].sum()) if not df.empty else 0
-        total_intersections = int(df["corner∩shot_seq_norm"].sum()) if not df.empty else 0
-
-        st.markdown(
-            f"""
-            **Totals in window**
-            - Team corner starts: **{total_corner_starts}**
-            - Shot events in matches: **{total_shots_in_matches}**
-            - Corner→Shot sequence overlaps (normalized seqId): **{total_intersections}**
-            """
-        )
-
-        if total_corner_starts == 0:
-            st.error(
-                "No team corner starts detected. Likely `possessionTypeName`/`sequenceStart` differs from expectations."
-            )
-        elif total_shots_in_matches == 0:
-            st.error(
-                "No shot events detected in these matches. Likely `baseTypeName/baseTypeId/resultName/labels` differ."
-            )
-        elif total_intersections == 0:
-            st.error(
-                "Shots exist in the match, but none share a sequenceId with corner starts. "
-                "Most likely `sequenceId` mismatch (type/format) or shots use different sequence linkage."
-            )
-
-        if examples:
-            st.subheader("Examples: corner + shot from same normalized sequenceId")
-            st.dataframe(pd.DataFrame(examples), width="stretch", hide_index=True)
-        else:
-            st.info("No corner+shot sequence overlap examples found in this window.")
-
-        st.caption(
-            "If `corner∩shot_seq_norm` is > 0 here but OA still reports 0 shots, "
-            "your OA code is probably failing to group sequences due to raw seqId typing or strict shot detection."
-        )
 # ---------------- UI ----------------
 _center_container_css()
 
@@ -663,11 +517,11 @@ if not all_teams:
 
 themes = build_team_themes()
 
-# --- Main content (header first, then config) ---
+shot_map = load_shot_map_from_full_sequences(EVENTS_SEQ_CSV, DATASET_ID)
+
 if "selected_team" not in st.session_state or st.session_state.selected_team not in all_teams:
     st.session_state.selected_team = all_teams[0]
 
-# compute header stats from current selection (before rendering config)
 matches_full = json_data_full.get("matches", []) or []
 team_matches_sorted = sorted(
     [m for m in matches_full if _match_has_team(m, st.session_state.selected_team)],
@@ -680,7 +534,6 @@ window_label = "All" if n_last_default >= team_total_for_header else f"Last {n_l
 
 theme = _theme_for_team(themes, st.session_state.selected_team)
 
-# ✅ Header at top
 _render_header(
     team=st.session_state.selected_team,
     primary_hex=theme.top_hex,
@@ -690,7 +543,6 @@ _render_header(
     matches_analyzed=team_total_for_header,
 )
 
-# ✅ Configuration below header
 st.subheader("Configuration")
 
 st.selectbox(
@@ -700,7 +552,6 @@ st.selectbox(
     key="selected_team",
 )
 
-# recompute after selection (Streamlit reruns automatically, but keep logic linear)
 team_matches_sorted = sorted(
     [m for m in matches_full if _match_has_team(m, st.session_state.selected_team)],
     key=_match_dt,
@@ -712,15 +563,13 @@ if team_total == 0:
     st.stop()
 
 n_last = st.slider(
-    "Slide if you only want to analyze last X matches",
+    "Analyze last X matches (selected team only)",
     min_value=1,
     max_value=team_total,
     value=min(st.session_state.get("n_last", team_total), team_total),
     step=1,
     key="n_last",
 )
-
-# _render_shot_debug_panel(json_data_full, st.session_state.selected_team, n_last)
 
 generate = st.button("Generate corner analysis", type="primary", width="stretch")
 if generate:
@@ -735,6 +584,7 @@ if generate:
             n_last=n_last,
             themes=themes,
             matches_analyzed_total=team_total,
+            shot_map=shot_map,
         )
 
     st.success("✅ PowerPoint generated.")
@@ -746,7 +596,6 @@ if generate:
         width="stretch",
     )
 
-# Sidebar: Add data + latest match (under update button)
 with st.sidebar:
     st.header("Add data")
 

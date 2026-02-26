@@ -365,15 +365,7 @@ def _color_and_clear_token_shapes(slide, token: str, *, hex_color: str) -> None:
         _clear_token_text(shp, token)
 
 
-def _color_top_and_bottom_bars(
-    slide,
-    *,
-    bar_hex: str,
-    slide_w: int,
-    slide_h: int,
-    meta_replacements: Optional[Dict[str, str]] = None,
-    fallback_hex: str = "#FFFFFF",
-) -> None:
+def _color_top_and_bottom_bars(slide, *, bar_hex: str, slide_w: int, slide_h: int) -> None:
     # heuristic fallback
     for shp, ax, ay, aw, ah, _ in iter_shapes_mapped(slide):
         if _is_bar_candidate(ax, ay, aw, ah, slide_w, slide_h):
@@ -381,10 +373,8 @@ def _color_top_and_bottom_bars(
 
     # token-based deterministic (and remove placeholder text)
     _color_and_clear_token_shapes(slide, "{top_bar}", hex_color=bar_hex)
+    _color_and_clear_token_shapes(slide, "{middle_bar}", hex_color=bar_hex)  # <-- EXACTLY like bottom_bar
     _color_and_clear_token_shapes(slide, "{bottom_bar}", hex_color=bar_hex)
-
-    # middle bar token-based (use provided replacements to pick the color)
-    _color_middle_bar(slide, meta_replacements=(meta_replacements or {}), fallback_hex=fallback_hex)
 # ============================================================
 # Picture insertion: by token & by shape name
 # ============================================================
@@ -598,7 +588,7 @@ def fill_corner_template_pptx(
             _fill_token_with_images(slide, token, imgs, exact=True)
 
         # Clear bar tokens
-        for tok in ("{top_bar}", "{bottom_bar}"):
+        for tok in ("{top_bar}", "{middle_bar}", "{bottom_bar}"):            
             for shp, *_ in _find_shapes_with_token(slide, tok):
                 _clear_token_text(shp, tok)
 

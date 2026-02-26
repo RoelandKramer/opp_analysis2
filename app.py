@@ -474,12 +474,57 @@ if not all_teams:
     st.error("❌ No teams found in dataset.")
     st.stop()
 
+# --- Main content (header first, then config) ---
+
 themes = build_team_themes()
-selected_team = st.selectbox("Select team", all_teams)
+
+# Ensure state
+if "selected_team" not in st.session_state:
+    st.session_state.selected_team = None
+
+# If not yet chosen, pick a default (first team)
+if st.session_state.selected_team is None:
+    st.session_state.selected_team = all_teams[0]
+
+# Compute values using current state
+selected_team = st.session_state.selected_team
 
 matches_full = json_data_full.get("matches", []) or []
 team_matches_sorted = sorted(
     [m for m in matches_full if _match_has_team(m, selected_team)],
+    key=_match_dt,
+    reverse=True,
+)
+team_total = len(team_matches_sorted) or 1  # avoid slider max=0
+n_last_default = min(team_total, st.session_state.get("n_last", team_total))
+
+window_label = "All" if n_last_default >= team_total else f"Last {n_last_default}"
+theme = _theme_for_team(themes, selected_team)
+
+# ✅ Header at top
+_render_header(
+    team=selected_team,
+    primary_hex=theme.top_hex,
+    secondary_hex=theme.rest_hex,
+    logo_path=theme.logo_relpath,
+    window_label=window_label,
+    matches_analyzed=team_total,
+)
+
+# ✅ Configuration below header
+st.subheader("Configuration")
+
+selected_team = st.selectbox(
+    "Select team",
+    all_teams,
+    index=all_teams.index(st.session_state.selected_team) if st.session_state.selected_team in all_teams else 0,
+    key="selected_team",
+)
+
+# Recompute after selection change (Streamlit reruns automatically)
+matches_full = json_data_full.get("matches", []) or []
+team_matches_sorted = sorted(
+    [m for m in matches_full if _match_has_team(m, st.session_state.selected_team)],
     key=_match_dt,
     reverse=True,
 )
@@ -492,28 +537,12 @@ n_last = st.slider(
     "Analyze last X matches (selected team only)",
     min_value=1,
     max_value=team_total,
-    value=team_total,
+    value=min(st.session_state.get("n_last", team_total), team_total),
     step=1,
+    key="n_last",
 )
-window_label = "All" if n_last >= team_total else f"Last {n_last}"
-
-theme = _theme_for_team(themes, selected_team)
-
-# ✅ Colored header at the very top (remove the plain white title)
-_render_header(
-    team=selected_team,
-    primary_hex=theme.top_hex,
-    secondary_hex=theme.rest_hex,
-    logo_path=theme.logo_relpath,
-    window_label=window_label,
-    matches_analyzed=team_total,
-)
-
-# Configuration (under colored header)
-st.subheader("Configuration")
 
 generate = st.button("Generate corner analysis", type="primary", width="stretch")
-
 if generate:
     if not os.path.exists(TEMPLATE_PPTX):
         st.error(f"❌ Template PPTX not found at `{TEMPLATE_PPTX}`. Put it in the repo root.")

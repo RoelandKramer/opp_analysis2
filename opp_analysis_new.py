@@ -843,17 +843,14 @@ def process_corner_data(
             corner_seq_id = corner_seq_id if corner_seq_id is not None else seq_id
 
             # Source of truth: full_sequences shot_map keyed by (match_id, corner_seq_id)
+
+            # Source of truth: full_sequences shot_map keyed by (match_id, corner_seq_id)
+            seq_has_shot = False
             if match_id and corner_seq_id:
                 seq_has_shot = bool(shot_map.get((match_id, corner_seq_id), False))
-            else:
-                seq_has_shot = False
-
-            # Fallback if shot_map misses: detect shot inside same sequenceId from corner_events
-            if not seq_has_shot and seq_id:
-                seq_has_shot = _sequence_has_shot(sequences_by_id.get(seq_id, []))
-
+            
+            
             e["seq_has_shot"] = bool(seq_has_shot)
-
             if e_side == "left":
                 (own_left_side if is_own else opponent_left_side).append(e)
             else:
@@ -984,11 +981,10 @@ def compute_league_attacking_corner_shot_rates(
                 continue
             seen_corner_keys.add(corner_key)
 
-            if shot_map is not None and match_id and seq_id:
-                seq_has_shot = bool(shot_map.get((match_id, seq_id), False))
-            else:
-                seq_events = sequences_by_id.get(seq_id, []) if seq_id is not None else []
-                seq_has_shot = _sequence_has_shot(seq_events) if seq_events else _sequence_has_shot([e])
+
+            seq_has_shot = False
+            if shot_map is not None and match_id and corner_seq_id:
+                seq_has_shot = bool(shot_map.get((match_id, corner_seq_id), False))
 
             bucket = _ensure_bucket(team, side, zone_end)
             bucket["total"] = int(bucket["total"]) + 1

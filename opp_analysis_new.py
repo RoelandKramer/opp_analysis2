@@ -249,6 +249,20 @@ def get_latest_match_info(json_data: Dict[str, Any]) -> Tuple[Optional[datetime]
 def _iter_numbers(x: Any) -> Iterable[float]:
     if isinstance(x, (int, float)) and math.isfinite(float(x)):
         yield float(x)
+def _build_player_label(df: pd.DataFrame, *, number_col: str = "s") -> pd.Series:
+    """
+    Returns label like '7. Genrich Sillé' when jersey number exists.
+    Falls back to 'Genrich Sillé' if number is missing/invalid.
+    """
+    name = df.get("player_name", pd.Series(["Unknown"] * len(df), index=df.index)).astype(str)
+
+    if number_col not in df.columns:
+        return name
+
+    num = pd.to_numeric(df[number_col], errors="coerce")
+    num_str = num.apply(lambda x: "" if pd.isna(x) else str(int(x)))
+    return np.where(num_str != "", num_str + ". " + name, name)
+
 
 def plot_defending_corner_players_diverging(
     def_tbl: pd.DataFrame,

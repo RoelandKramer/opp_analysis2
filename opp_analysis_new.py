@@ -254,7 +254,118 @@ def _iter_numbers(x: Any) -> Iterable[float]:
 def _round_up_to_step(value: float, step: float) -> float:
     return math.ceil(value / step) * step
 
+def build_header_tables_from_full_sequences(
+    seq_df: pd.DataFrame,
+    *,
+    team: str,
+) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    """
+    Returns:
+      att_tbl: columns compatible with plot_attacking_corner_players_headers()
+      def_tbl: columns compatible with plot_defending_corner_players_diverging()
 
+    Uses ONLY full sequences (corner_events_full_sequences.csv).
+    Logic:
+      - Attacking: header shots by `team` in CORNER sequences started by `team`
+      - Defending: header shots by opponents in CORNER sequences started by opponent (i.e., against `team`)
+    """
+    if seq_df is None or seq_df.empty:
+        return pd.DataFrame(), pd.DataFrame()
+
+    df = seq_df.copy().where(pd.notnull(seq_df), None)
+
+    # Required columns (best-effort)
+    if "match_id" not in df.columns or "sequenceId" not in df.columns:
+        return pd.DataFrame(), pd.DataFrame()
+
+    # Identify corner sequence starts
+    if "possessionTypeName" not in df.columns or "sequenceStart" not in df.columns:
+        return pd.DataFrame(), pd.DataFrame()
+
+    # shot rows
+    bt = "baseTypeName" if "baseTypeName" in df.columns else None
+    bid = "baseTypeId" if "baseTypeId" in df.columns else None
+    if bt is None and bid is None:
+        return pd.DataFrame(), pd.DataFrame()
+
+    df["team_canon"] = df["teamName"].apply(_canon_team)
+    team_c = _canon_team(team) or team
+
+    df["seqId_norm"] = df["sequenceId"].astype(str)
+
+    # mark corners (start event)
+    df["is_corner_start"] = (df["possessionTypeName"] == "CORNER") & df["sequenceStart"].apply(truthy)
+
+    # Determine which sequences are corner sequences and which team started them
+    corner_starts = df.loc[df["is_corner_start"], ["match_id", "seqId_norm", "team_canon"]].dropna()
+    if corner_starts.empty:
+        return pd.DataFrame(), pd.DataFrame()
+
+    # keep first starter per (match, seq)
+    corner_starts = (
+        corner_starts.groupby(["match_id", "seqId_norm"], as_index=False)
+        .agg({"team_canon": "first"})
+        .rename(columns={"team_canon": "corner_start_team"})
+    )
+
+    df = df.merge(corner_starts, on=["match_id", "seqId_norm"], how="left")
+
+    # Shot detection
+    is_shot = pd.Series(False, index=df.index)
+    if bt is not None:
+        is_shot |= df[bt].astype(str).str.strip().str.upper().eq("SHOT")
+    if bid is not None:
+        bid_s = pd.to_numeric(df[bid], errors="coerce")
+        is_shot |= bid_s.eq(6)
+
+    # header shot detection
+    df["bodyPartName_norm"] = df.get("bodyPartName", None)
+    df["is_header_shot"] = is_shot & df["bodyPartName_norm"].astype(str).str.strip().str.upper().isin(HEADER_BODY_PART_NAMES)
+
+    # goal detection
+    df["is_goal"] = df.get("resultName", "").astype(str).str.strip().str.upper().eq("SUCCESSFUL")
+
+    # Filter to only header shots inside identified corner sequences
+    hs = df.loc[df["is_header_shot"] & df["corner_start_team"].notna()].copy()
+    if hs.empty:
+        return pd.DataFrame(), pd.DataFrame()
+
+    # --- ATTACKING: corner_start_team == team, header shooter is same team (usually true)
+    att = hs.loc[hs["corner_start_team"] == team_c].copy()
+    if not att.empty:
+        att["player_name"] = att.get("playerName", "Unknown").fillna("Unknown").astype(str)
+        att_tbl = (
+            att.groupby("player_name", as_index=False)
+            .agg(
+                Attacking_corners_headed=("is_header_shot", "sum"),
+                Attacking_corners_headed_and_scored=("is_goal", "sum"),
+            )
+        )
+    else:
+        att_tbl = pd.DataFrame(columns=["player_name", "Attacking_corners_headed", "Attacking_corners_headed_and_scored"])
+
+    # --- DEFENDING: corner_start_team != team, i.e. opponent corner sequences against us
+    dff = hs.loc[hs["corner_start_team"] != team_c].copy()
+    if not dff.empty:
+        dff["player_name"] = dff.get("playerName", "Unknown").fillna("Unknown").astype(str)
+
+        # Map to columns that your diverging plot already understands:
+        # Faults = Defending_corners_errors + fatal_errors
+        # GoalsAllowed = Defending_corners_fatal_errors
+        # Clearances = Defending_corners_defended (we don't have it from sequences => 0)
+        def_tbl = (
+            dff.groupby("player_name", as_index=False)
+            .agg(
+                Defending_corners_errors=("is_header_shot", "sum"),
+                Defending_corners_fatal_errors=("is_goal", "sum"),
+            )
+        )
+        def_tbl["Defending_corners_defended"] = 0
+    else:
+        def_tbl = pd.DataFrame(columns=["player_name", "Defending_corners_errors", "Defending_corners_fatal_errors", "Defending_corners_defended"])
+
+    return att_tbl, def_tbl
+    
 def _collect_event_xy(events: List[Dict[str, Any]]) -> Tuple[np.ndarray, np.ndarray]:
     xs, ys = [], []
     for ev in events:

@@ -758,17 +758,17 @@ if generate:
         mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
         width="stretch",
     )
-# ---------------- DEBUG PANEL (Streamlit visible) ----------------
-if "DEBUG_MODE" not in locals():
-    DEBUG_MODE = False
 
-if DEBUG_MODE:
+# ---------------- DEBUG PANEL (Streamlit visible) ----------------
+if st.session_state.get("debug_mode", False):
     st.divider()
     st.subheader("Debug panel")
 
-    # A) Header charts debug
     with st.expander("A) Header charts: data → figures → PPT placement", expanded=True):
-        hdr = debug_headers_streamlit(seq_csv_path=EVENTS_SEQ_CSV, selected_team=st.session_state.selected_team)
+        hdr = debug_headers_streamlit(
+            seq_csv_path=EVENTS_SEQ_CSV,
+            selected_team=st.session_state.selected_team,
+        )
 
         if not hdr["ok"]:
             st.error(f"Header build failed: {hdr['error']}")
@@ -788,18 +788,22 @@ if DEBUG_MODE:
                 else:
                     st.warning("No defending header PNG produced (def_tbl empty or plotting failed).")
 
-            st.info(
-                "If the PNG previews exist but the PPT still shows {att_corners_headers}/{def_corners_headers}, "
-                "then the PPT filler couldn't find the target shapes/tokens."
-            )
+            if "last_pptx_bytes" in st.session_state:
+                scan = _ppt_scan_tokens_and_shapes_from_bytes(st.session_state["last_pptx_bytes"])
+                st.write({"generated_pptx_scan": scan})
+                if scan["tokens_present"]:
+                    st.warning(f"Tokens still present in generated PPTX: {scan['tokens_present']}")
+                else:
+                    st.success("No header tokens found in generated PPTX → replacement likely succeeded.")
+            else:
+                st.info("Generate a PPTX once to enable PPTX placeholder scan.")
 
-    # B) Attacking corners -> shot (100%) debug
-    with st.expander("B) Attacking corners → shot looks like 100%: diagnose shot_map vs fallback", expanded=True):
+    with st.expander("B) Attacking corners → shot: diagnose 100%", expanded=True):
         df_dbg = debug_attacking_shots_streamlit(
             json_data_full=json_data_full,
             selected_team=st.session_state.selected_team,
             shot_map=shot_map,
-            n_last=n_last,
+            n_last=st.session_state.get("n_last", 1),
         )
 
         if df_dbg.empty:
@@ -817,25 +821,26 @@ if DEBUG_MODE:
                 }
             )
 
-            st.caption("Most common corner_seq_id values (if a few dominate, IDs may be broken/collapsing).")
+            st.caption("Most common corner_seq_id values")
             st.dataframe(df_dbg["corner_seq_id"].astype(str).value_counts().head(15))
 
-            st.caption("Sample rows (map vs fallback).")
+            st.caption("Sample rows")
             st.dataframe(df_dbg.head(50))
 
-            # Download CSV
-            csv_bytes = df_dbg.to_csv(index=False).encode("utf-8")
             st.download_button(
                 "Download attacking shot debug CSV",
-                data=csv_bytes,
+                data=df_dbg.to_csv(index=False).encode("utf-8"),
                 file_name=f"attacking_shot_debug_{st.session_state.selected_team.replace(' ', '_')}.csv",
                 mime="text/csv",
             )
-
 with st.sidebar:
     st.divider()
-    DEBUG_MODE = st.toggle("Debug mode", value=False, help="Show diagnostics for headers + shot mapping.")
-    st.header("Add data")
+    st.toggle(
+        "Debug mode",
+        value=False,
+        key="debug_mode",
+        help="Show diagnostics for headers + shot mapping.",
+    )
 
     if "uploader_key" not in st.session_state:
         st.session_state.uploader_key = 0

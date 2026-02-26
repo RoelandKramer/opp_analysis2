@@ -802,7 +802,10 @@ def process_corner_data(json_data: Dict[str, Any], selected_team_name: str) -> D
             seq_id = e.get("sequenceId")
             seq_events = sequences_by_id.get(str(seq_id), []) if seq_id is not None else []
             seq_has_shot = _sequence_has_shot(seq_events) if seq_events else _sequence_has_shot([e])
-
+            # DEBUG (remove after): detect seqId mismatch
+            if seq_id is not None and not seq_events:
+                print("WARN: seq_id missing in sequences_by_id:", seq_id, "available example keys:", list(sequences_by_id.keys())[:5])
+                
             if e_side == "left":
                 (own_left_side if is_own else opponent_left_side).append(e)
             else:

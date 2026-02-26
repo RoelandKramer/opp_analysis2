@@ -458,6 +458,10 @@ def _generate_filled_pptx(
                 fig_def_headers = oa.plot_defending_corner_players_diverging(def_tbl, max_players=15)
     except Exception:
         pass
+    
+    # after fig_att_headers / fig_def_headers are created:
+    att_headers_png = fig_to_png_bytes_labels(fig_att_headers, dpi=360) if fig_att_headers is not None else None
+    def_headers_png = fig_to_png_bytes_labels(fig_def_headers, dpi=360) if fig_def_headers is not None else None
 
     images_by_shape_name = {
         0: {
@@ -465,12 +469,13 @@ def _generate_filled_pptx(
             "PH_Corners_right_positions_vis": fig_to_png_bytes(fig_att_R, dpi=360),
             "PH_Corners_left_shots_vis": fig_to_png_bytes(fig_att_shots_L, dpi=360),
             "PH_Corners_right_shots_vis": fig_to_png_bytes(fig_att_shots_R, dpi=360),
-            "PH_def_left": fig_to_png_bytes(fig_def_L, dpi=360),
-            "PH_def_right": fig_to_png_bytes(fig_def_R, dpi=360),
+    
+            **({"PH_att_c_headers": att_headers_png} if att_headers_png else {}),
+            **({"PH_def_c_headers": def_headers_png} if def_headers_png else {}),
         },
         1: {
-        **({"PH_att_c_headers": att_headers_png} if att_headers_png else {}),
-        **({"PH_def_c_headers": def_headers_png} if def_headers_png else {}),
+            "PH_def_left": fig_to_png_bytes(fig_def_L, dpi=360),
+            "PH_def_right": fig_to_png_bytes(fig_def_R, dpi=360),
         },
     }
 

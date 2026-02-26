@@ -262,20 +262,31 @@ def _debug_panel(json_data_full: dict, selected_team: str) -> None:
 
 
 def _match_has_team(match: dict, team_name: str) -> bool:
-    # Keep men's canonicalization logic (do not remove)
-    team_canon = oa.get_canonical_team(team_name) or team_name
+    # Keep men's canonicalization logic (first attempt)
+    team_raw = (team_name or "").strip()
+    team_canon = oa.get_canonical_team(team_raw)
 
     events = match.get("corner_events", []) or []
     if not events:
         return False
 
-    teams_in_match = {
-        oa.get_canonical_team(ev.get("teamName"))
-        for ev in events
-        if oa.get_canonical_team(ev.get("teamName"))
-    }
-    return team_canon in teams_in_match
+    # 1) Canonical path (men) — unchanged behavior
+    if team_canon:
+        teams_in_match_canon = {
+            oa.get_canonical_team(ev.get("teamName"))
+            for ev in events
+            if oa.get_canonical_team(ev.get("teamName"))
+        }
+        if team_canon in teams_in_match_canon:
+            return True
 
+    # 2) Fallback path (women / unknown) — raw compare
+    teams_in_match_raw = {
+        str(ev.get("teamName") or "").strip()
+        for ev in events
+        if str(ev.get("teamName") or "").strip()
+    }
+    return team_raw in teams_in_match_raw
 
 def _save_uploads_to_batch(uploaded_files, batch_dir: Path) -> int:
     json_count = 0

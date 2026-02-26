@@ -384,7 +384,7 @@ def _generate_filled_pptx(
     )
 
     (tot_R, shot_R, pct_R) = results["attacking_shots"]["right"]
-    pctiles_R = oa.build_percentiles_for_team(league_stats, selected_team, "right", min_zone_corners=4)
+    pctiles_R = oa.build_percentiles_for_team(league_stats, selected_team, "right", min_zone_corners=0)
     fig_att_shots_R = oa.plot_shots_attacking_with_percentile(
         get_img_path("def_R"),
         viz_config["def_R"],

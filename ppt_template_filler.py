@@ -66,14 +66,7 @@ CROP_BY_SHAPE_NAME: Dict[str, CropSpec] = {
 # ============================================================
 # Basics
 # ============================================================
-def _color_middle_bar(slide, *, meta_replacements: Dict[str, str], fallback_hex: str) -> None:
-    hex_color = (
-        (meta_replacements or {}).get("{middle_bar}")
-        or (meta_replacements or {}).get("middle_bar")
-        or fallback_hex
-    )
-    _color_and_clear_token_shapes(slide, "{middle_bar}", hex_color=hex_color)
-    
+
 def _hex_to_rgb(hex_color: str) -> RGBColor:
     s = (hex_color or "").strip().lstrip("#")
     if len(s) != 6:
@@ -373,7 +366,7 @@ def _color_top_and_bottom_bars(slide, *, bar_hex: str, slide_w: int, slide_h: in
 
     # token-based deterministic (and remove placeholder text)
     _color_and_clear_token_shapes(slide, "{top_bar}", hex_color=bar_hex)
-    _color_and_clear_token_shapes(slide, "{middle_bar}", hex_color=bar_hex)  # <-- EXACTLY like bottom_bar
+    _color_and_clear_token_shapes(slide, "{middle_bar}", hex_color=bar_hex)  # same as bottom_bar
     _color_and_clear_token_shapes(slide, "{bottom_bar}", hex_color=bar_hex)
 # ============================================================
 # Picture insertion: by token & by shape name
@@ -538,14 +531,7 @@ def fill_corner_template_pptx(
     for slide_idx, slide in enumerate(prs.slides):
         _set_slide_background(slide, bg_hex=team_secondary_hex)
         _color_background_rectangles(slide, bg_hex=team_secondary_hex, slide_w=slide_w, slide_h=slide_h)
-        _color_top_and_bottom_bars(
-            slide,
-            bar_hex=team_primary_hex,
-            slide_w=slide_w,
-            slide_h=slide_h,
-            meta_replacements=base_repl,
-            fallback_hex=team_secondary_hex,
-        )
+        _color_top_and_bottom_bars(slide, bar_hex=team_primary_hex, slide_w=slide_w, slide_h=slide_h)
         for shp, *_ in iter_shapes_mapped(slide):
             _replace_text_in_shape(shp, base_repl)
 

@@ -417,49 +417,42 @@ def _replace_named_shape_with_picture(slide, shape_name: str, img_bytes: bytes) 
     slide.shapes.add_picture(io.BytesIO(img_bytes), ax, ay, width=aw, height=ah)
     return True
 
-
 # ============================================================
-# Tables
+# Tables (by shape name, robust to template changes)
 # ============================================================
 
-def _find_tables(slide) -> List:
-    return [shp.table for shp in slide.shapes if getattr(shp, "has_table", False)]
+TAKERS_LEFT_TABLE_SHAPE_NAME = "PH_takers_left"
+TAKERS_RIGHT_TABLE_SHAPE_NAME = "PH_takers_right"
 
 
-def _write_df_to_ppt_table(table, df: pd.DataFrame) -> None:
-    """
-    Writes DF into an existing PPT table and forces ALL cell text to 12pt.
-    """
-    if df is None:
-        df = pd.DataFrame()
+def _find_table_shape_by_name(prs: Presentation, shape_name: str):
+    for slide in prs.slides:
+        for shp in slide.shapes:
+            if getattr(shp, "has_table", False) and getattr(shp, "name", None) == shape_name:
+                return shp.table
+    return None
 
-    n_rows = len(table.rows)
-    n_cols = len(table.columns)
 
-    # Clear body
-    for r in range(1, n_rows):
-        for c in range(n_cols):
-            table.cell(r, c).text = ""
+def _fill_takers_tables(prs: Presentation, left_df: pd.DataFrame, right_df: pd.DataFrame) -> None:
+    # 1) Preferred: by explicit shape name (works regardless of slide order)
+    left_tbl = _find_table_shape_by_name(prs, TAKERS_LEFT_TABLE_SHAPE_NAME)
+    right_tbl = _find_table_shape_by_name(prs, TAKERS_RIGHT_TABLE_SHAPE_NAME)
 
-    # Fill body
-    if not df.empty:
-        values = df.astype(str).replace({"nan": "-", "None": "-"}).values.tolist()
-        max_write = max(0, n_rows - 1)
-        for r in range(min(max_write, len(values))):
-            row_vals = values[r]
-            for c in range(min(n_cols, len(row_vals))):
-                table.cell(r + 1, c).text = row_vals[c]
+    if left_tbl is not None:
+        _write_df_to_ppt_table(left_tbl, left_df)
+    if right_tbl is not None:
+        _write_df_to_ppt_table(right_tbl, right_df)
 
-    # Force 12pt everywhere (headers + body)
-    for r in range(n_rows):
-        for c in range(n_cols):
-            cell = table.cell(r, c)
-            if not cell.text_frame:
-                continue
-            for para in cell.text_frame.paragraphs:
-                for run in para.runs:
-                    run.font.size = Pt(12)
+    # 2) Backward-compatible fallback: old behavior if names not found
+    if left_tbl is None and len(prs.slides) >= 1:
+        t1 = _find_tables(prs.slides[0])
+        if t1:
+            _write_df_to_ppt_table(t1[0], left_df)
 
+    if right_tbl is None and len(prs.slides) >= 2:
+        t2 = _find_tables(prs.slides[1])
+        if t2:
+            _write_df_to_ppt_table(t2[0], right_df)
 
 # ============================================================
 # Public API

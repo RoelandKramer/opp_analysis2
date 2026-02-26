@@ -365,7 +365,15 @@ def _color_and_clear_token_shapes(slide, token: str, *, hex_color: str) -> None:
         _clear_token_text(shp, token)
 
 
-def _color_top_and_bottom_bars(slide, *, bar_hex: str, slide_w: int, slide_h: int) -> None:
+def _color_top_and_bottom_bars(
+    slide,
+    *,
+    bar_hex: str,
+    slide_w: int,
+    slide_h: int,
+    meta_replacements: Optional[Dict[str, str]] = None,
+    fallback_hex: str = "#FFFFFF",
+) -> None:
     # heuristic fallback
     for shp, ax, ay, aw, ah, _ in iter_shapes_mapped(slide):
         if _is_bar_candidate(ax, ay, aw, ah, slide_w, slide_h):
@@ -374,8 +382,9 @@ def _color_top_and_bottom_bars(slide, *, bar_hex: str, slide_w: int, slide_h: in
     # token-based deterministic (and remove placeholder text)
     _color_and_clear_token_shapes(slide, "{top_bar}", hex_color=bar_hex)
     _color_and_clear_token_shapes(slide, "{bottom_bar}", hex_color=bar_hex)
-    _color_middle_bar(slide, meta_replacements=base_repl, fallback_hex=team_secondary_hex)
 
+    # middle bar token-based (use provided replacements to pick the color)
+    _color_middle_bar(slide, meta_replacements=(meta_replacements or {}), fallback_hex=fallback_hex)
 # ============================================================
 # Picture insertion: by token & by shape name
 # ============================================================
@@ -510,8 +519,14 @@ def fill_corner_template_pptx(
     for slide_idx, slide in enumerate(prs.slides):
         _set_slide_background(slide, bg_hex=team_secondary_hex)
         _color_background_rectangles(slide, bg_hex=team_secondary_hex, slide_w=slide_w, slide_h=slide_h)
-        _color_top_and_bottom_bars(slide, bar_hex=team_primary_hex, slide_w=slide_w, slide_h=slide_h)
-
+        _color_top_and_bottom_bars(
+            slide,
+            bar_hex=team_primary_hex,
+            slide_w=slide_w,
+            slide_h=slide_h,
+            meta_replacements=base_repl,
+            fallback_hex=team_secondary_hex,
+        )
         for shp, *_ in iter_shapes_mapped(slide):
             _replace_text_in_shape(shp, base_repl)
 
@@ -559,16 +574,8 @@ def fill_corner_template_pptx(
                 _clear_token_text(shp, tok)
 
     # tables
-    if len(prs.slides) >= 1:
-        t1 = _find_tables(prs.slides[0])
-        if t1:
-            _write_df_to_ppt_table(t1[0], left_takers_df)
-
-    if len(prs.slides) >= 2:
-        t2 = _find_tables(prs.slides[1])
-        if t2:
-            _write_df_to_ppt_table(t2[0], right_takers_df)
-
+    _fill_takers_tables(prs, left_takers_df, right_takers_df)
+    
     out = io.BytesIO()
     prs.save(out)
 

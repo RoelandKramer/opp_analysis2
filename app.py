@@ -181,6 +181,21 @@ def _match_dt(match: dict) -> datetime:
 
 # ---------------- DEBUG HELPERS ----------------
 def _debug_panel(json_data_full: dict, selected_team: str) -> None:
+    with st.expander("🧪 Debug: does OA analysis see any corners for this team?"):
+        matches_full = json_data_full.get("matches", []) or []
+        team_matches = [m for m in matches_full if _match_has_team(m, selected_team)]
+        st.write("team_matches:", len(team_matches))
+    
+        json_view = {"matches": team_matches[:5]}
+        # raw corner count for sanity
+        raw_corner_events = sum(len(m.get("corner_events", []) or []) for m in json_view["matches"])
+        st.write("raw corner_events in first 5 matches:", raw_corner_events)
+    
+        # OA result sanity
+        oa_res = get_analysis_results(json_view, selected_team)
+        st.write("OA own_left_count:", oa_res.get("own_left_count"))
+        st.write("OA own_right_count:", oa_res.get("own_right_count"))
+    
     with st.expander("🛠 Debug: team/match detection", expanded=True):
         matches_full = json_data_full.get("matches", []) or []
         st.write("DATA_ROOT:", str(DATA_ROOT.resolve()))

@@ -72,7 +72,8 @@ def _hex_to_rgb(hex_color: str) -> RGBColor:
     if len(s) != 6:
         return RGBColor(255, 255, 255)
     return RGBColor(int(s[0:2], 16), int(s[2:4], 16), int(s[4:6], 16))
-
+def _find_tables(slide) -> List:
+    return [shp.table for shp in slide.shapes if getattr(shp, "has_table", False)]
 
 def fig_to_png_bytes(fig: matplotlib.figure.Figure, *, dpi: int = 240) -> bytes:
     """

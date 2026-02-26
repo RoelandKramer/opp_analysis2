@@ -477,62 +477,52 @@ if not os.path.exists(CORNER_EVENTS_CSV):
     st.stop()
 
 json_data_full = load_corner_jsonlike(CORNER_EVENTS_CSV, DATASET_ID)
-all_teams = get_canonical_team_options(json_data_full, DATASET_ID)
-selected_team = st.selectbox("Select team", all_teams)
 
+all_teams = get_canonical_team_options(json_data_full, DATASET_ID)
 if not all_teams:
     st.error("❌ No teams found in dataset.")
     st.stop()
 
-# --- Main content (header first, then config) ---
-
 themes = build_team_themes()
 
-# Ensure state
-if "selected_team" not in st.session_state:
-    st.session_state.selected_team = None
-
-# If not yet chosen, pick a default (first team)
-if st.session_state.selected_team is None:
+# --- Main content (header first, then config) ---
+if "selected_team" not in st.session_state or st.session_state.selected_team not in all_teams:
     st.session_state.selected_team = all_teams[0]
 
-# Compute values using current state
-selected_team = st.session_state.selected_team
-
+# compute header stats from current selection (before rendering config)
 matches_full = json_data_full.get("matches", []) or []
 team_matches_sorted = sorted(
-    [m for m in matches_full if _match_has_team(m, selected_team)],
+    [m for m in matches_full if _match_has_team(m, st.session_state.selected_team)],
     key=_match_dt,
     reverse=True,
 )
-team_total = len(team_matches_sorted) or 1  # avoid slider max=0
-n_last_default = min(team_total, st.session_state.get("n_last", team_total))
+team_total_for_header = len(team_matches_sorted) or 1
+n_last_default = min(team_total_for_header, st.session_state.get("n_last", team_total_for_header))
+window_label = "All" if n_last_default >= team_total_for_header else f"Last {n_last_default}"
 
-window_label = "All" if n_last_default >= team_total else f"Last {n_last_default}"
-theme = _theme_for_team(themes, selected_team)
+theme = _theme_for_team(themes, st.session_state.selected_team)
 
 # ✅ Header at top
 _render_header(
-    team=selected_team,
+    team=st.session_state.selected_team,
     primary_hex=theme.top_hex,
     secondary_hex=theme.rest_hex,
     logo_path=theme.logo_relpath,
     window_label=window_label,
-    matches_analyzed=team_total,
+    matches_analyzed=team_total_for_header,
 )
 
 # ✅ Configuration below header
 st.subheader("Configuration")
 
-selected_team = st.selectbox(
+st.selectbox(
     "Select team",
     all_teams,
-    index=all_teams.index(st.session_state.selected_team) if st.session_state.selected_team in all_teams else 0,
+    index=all_teams.index(st.session_state.selected_team),
     key="selected_team",
 )
 
-# Recompute after selection change (Streamlit reruns automatically)
-matches_full = json_data_full.get("matches", []) or []
+# recompute after selection (Streamlit reruns automatically, but keep logic linear)
 team_matches_sorted = sorted(
     [m for m in matches_full if _match_has_team(m, st.session_state.selected_team)],
     key=_match_dt,
@@ -561,7 +551,7 @@ if generate:
     with st.spinner("Generating filled PowerPoint..."):
         pptx_bytes, fname = _generate_filled_pptx(
             json_data_full=json_data_full,
-            selected_team=selected_team,
+            selected_team=st.session_state.selected_team,
             n_last=n_last,
             themes=themes,
             matches_analyzed_total=team_total,
@@ -576,7 +566,7 @@ if generate:
         width="stretch",
     )
 
-# Sidebar: Add data + latest match
+# Sidebar: Add data + latest match (under update button)
 with st.sidebar:
     st.header("Add data")
 
@@ -592,7 +582,6 @@ with st.sidebar:
 
     run_update = st.button("Update database", type="primary", disabled=not uploaded_files, width="stretch")
 
-    # ✅ Latest match caption under update button (as requested)
     latest_dt, latest_name = oa.get_latest_match_info(json_data_full)
     st.caption(
         f"Latest match in dataset: {latest_dt.strftime('%d-%m-%Y')} — {latest_name}"

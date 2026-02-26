@@ -520,16 +520,24 @@ def _generate_filled_pptx(
             "PH_Corners_right_positions_vis": fig_to_png_bytes(fig_att_R),
             "PH_Corners_left_shots_vis": fig_to_png_bytes(fig_att_shots_L),
             "PH_Corners_right_shots_vis": fig_to_png_bytes(fig_att_shots_R),
-        },
-        1: {  # Slide 2
             "PH_def_left": fig_to_png_bytes(fig_def_L),
             "PH_def_right": fig_to_png_bytes(fig_def_R),
+
         },
     }
 
     images_by_token = {
+        # headers
         "{att_corners_headers}": [fig_to_png_bytes_labels(fig_att_headers)] if fig_att_headers is not None else [],
         "{def_corners_headers}": [fig_to_png_bytes_labels(fig_def_headers)] if fig_def_headers is not None else [],
+    
+        # attacking shots visuals (now token-driven so it can be on any slide)
+        "{Corners_left_shots_vis}": [fig_to_png_bytes(fig_att_shots_L)],
+        "{Corners_right_shots_vis}": [fig_to_png_bytes(fig_att_shots_R)],
+    
+        # defensive shots visuals (you moved these to slide 1; token-driven fixes placement)
+        "{def_Corner_left_shots_vis}": [fig_to_png_bytes(fig_def_L)],
+        "{def_Corner_right_shots_vis}": [fig_to_png_bytes(fig_def_R)],
     }
 
     # Template tokens (you added {middle_bar}; treat it like {bottom_bar})
@@ -538,8 +546,12 @@ def _generate_filled_pptx(
         "{nlc}": str(results.get("own_left_count", 0)),
         "{nrc}": str(results.get("own_right_count", 0)),
         "{MATCHES_ANALYZED}": str(matches_analyzed_total),
+    
+        # Provide both braced and unbraced variants (covers both filler implementations)
         "{bottom_bar}": theme.rest_hex,
+        "bottom_bar": theme.rest_hex,
         "{middle_bar}": theme.rest_hex,
+        "middle_bar": theme.rest_hex,
     }
 
     payload = fill_corner_template_pptx(

@@ -703,20 +703,20 @@ def process_corner_data(
             else:
                 (own_right_side if is_own else opponent_right_side).append(e)
 
-           if seq_id is not None:
-               seq_evs = sequences_by_id.get(seq_id, [])
-               if not seq_evs:
-                   continue
+            if seq_id is not None:
+                seq_evs = sequences_by_id.get(seq_id, [])
+                if not seq_evs:
+                    continue
             
-               key = (match_id, corner_seq_s, is_own)
-               if key not in _seen_seq_keys:
-                   _seen_seq_keys.add(key)
+                key = (match_id, corner_seq_s, is_own)
+                if key not in _seen_seq_keys:
+                    _seen_seq_keys.add(key)
         
-                   for sev in seq_evs:
-                       sev["zone"], sev["corner_side"] = zone_end, e_side
+                    for sev in seq_evs:
+                        sev["zone"], sev["corner_side"] = zone_end, e_side
         
-                   if (not is_own) and seq_has_shot and _valid_zone_for_shot_lists(zone_end):
-                       opponent_seq_with_shot.append(seq_evs)
+                    if (not is_own) and seq_has_shot and _valid_zone_for_shot_lists(zone_end):
+                        opponent_seq_with_shot.append(seq_evs)
                        
     def _calc_defensive_stats(opp_corners: List[Dict[str, Any]], opp_shot_seqs: List[List[Dict[str, Any]]], side_filter: str):
         total_zone = Counter([c["zone"] for c in opp_corners if _valid_zone_for_shot_lists(c.get("zone"))])

@@ -465,18 +465,20 @@ def _generate_filled_pptx(
             "PH_Corners_right_positions_vis": fig_to_png_bytes(fig_att_R, dpi=360),
             "PH_Corners_left_shots_vis": fig_to_png_bytes(fig_att_shots_L, dpi=360),
             "PH_Corners_right_shots_vis": fig_to_png_bytes(fig_att_shots_R, dpi=360),
-        },
-        1: {
             "PH_def_left": fig_to_png_bytes(fig_def_L, dpi=360),
             "PH_def_right": fig_to_png_bytes(fig_def_R, dpi=360),
+        },
+        1: {
+        **({"PH_att_c_headers": att_headers_png} if att_headers_png else {}),
+        **({"PH_def_c_headers": def_headers_png} if def_headers_png else {}),
         },
     }
 
     # ✅ These tokens now insert reliably (ppt filler uses exact=False for them)
-    images_by_token = {
-        "{att_corners_headers}": [fig_to_png_bytes_labels(fig_att_headers, dpi=360)] if fig_att_headers is not None else [],
-        "{def_corners_headers}": [fig_to_png_bytes_labels(fig_def_headers, dpi=360)] if fig_def_headers is not None else [],
-    }
+    images_by_token = {}
+    #     "{att_corners_headers}": [fig_to_png_bytes_labels(fig_att_headers, dpi=360)] if fig_att_headers is not None else [],
+    #     "{def_corners_headers}": [fig_to_png_bytes_labels(fig_def_headers, dpi=360)] if fig_def_headers is not None else [],
+    # }
 
     meta = {
         "{TEAM_NAME}": selected_team,

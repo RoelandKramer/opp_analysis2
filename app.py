@@ -194,11 +194,11 @@ def get_canonical_team_options(json_data_full: dict, cache_buster: str) -> List[
     return sorted(canon)
 
 
-@st.cache_data
+@st.cache_data@st.cache_data
 def load_shot_map_from_full_sequences(seq_csv_path: str, cache_buster: str) -> Dict[Tuple[str, str], bool]:
     """
-    (match_id, sequenceId) -> True if that sequence contains a shot event.
-    Source of truth for women shot detection.
+    (match_id, corner_sequence_id) -> True if that CORNER SEQUENCE contains a shot.
+    Falls back to (match_id, sequenceId) only if corner_sequence_id doesn't exist.
     """
     _ = cache_buster
     if not os.path.exists(seq_csv_path):
@@ -209,8 +209,12 @@ def load_shot_map_from_full_sequences(seq_csv_path: str, cache_buster: str) -> D
     if "match_id" not in df.columns:
         return {}
 
-    seq_col = "sequenceId" if "sequenceId" in df.columns else ("corner_sequence_id" if "corner_sequence_id" in df.columns else None)
-    if seq_col is None:
+    # ✅ Prefer corner_sequence_id (this is the correct "corner -> shot" grouping)
+    if "corner_sequence_id" in df.columns:
+        seq_col = "corner_sequence_id"
+    elif "sequenceId" in df.columns:
+        seq_col = "sequenceId"
+    else:
         return {}
 
     bt_col = "baseTypeName" if "baseTypeName" in df.columns else None
@@ -218,8 +222,8 @@ def load_shot_map_from_full_sequences(seq_csv_path: str, cache_buster: str) -> D
     if bt_col is None and bid_col is None:
         return {}
 
-    df["match_id"] = df["match_id"].astype(str)
-    df[seq_col] = df[seq_col].astype(str)
+    df["match_id"] = df["match_id"].astype(str).str.strip()
+    df[seq_col] = df[seq_col].astype(str).str.strip()
 
     is_shot = pd.Series(False, index=df.index)
     if bt_col is not None:
@@ -229,11 +233,14 @@ def load_shot_map_from_full_sequences(seq_csv_path: str, cache_buster: str) -> D
         is_shot |= bid.eq(6)
 
     shot_rows = df.loc[is_shot, ["match_id", seq_col]].dropna()
+
     out: Dict[Tuple[str, str], bool] = {}
     for mid, sid in shot_rows.itertuples(index=False):
-        out[(str(mid), str(sid))] = True
+        mid_s = str(mid).strip()
+        sid_s = str(sid).strip()
+        if mid_s and sid_s:
+            out[(mid_s, sid_s)] = True
     return out
-
 
 def _match_dt(match: dict) -> datetime:
     dt = match.get("match_date")

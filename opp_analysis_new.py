@@ -215,6 +215,20 @@ TEAM_NAME_MAPPING: Dict[str, Optional[str]] = {
     "VVV-Venlo": "VVV-Venlo",
     "Vitesse": "Vitesse",
     "Willem II": "Willem II",
+    "FC Twente W" : "FC Twente W",
+    "ADO Den Haag W: : "ADO Den Haag W",
+    "AZ W" : "AZ W",
+    "Ajax W" : Ajax W",,
+    "Excelsior Rotterdam W" : "Excelsior Rotterdam W",
+    "Feyenoord W" : "Feyenoord W",
+    "Hera United W" : "Hera United W",
+    "NAC Breda W" : "NAC Breda W",
+    "PEC ZWOLLE W" : "PEC Zwolle W",
+    "PSV W": "PSV W",
+    "SC Heerenveen W", "SC Heerenveen W",
+    "Utrecht W", "Utrecht W",
+    
+    
     # aliases
     "Almere City": "Almere City FC",
     "Den Bosch": "FC Den Bosch",

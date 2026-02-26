@@ -225,8 +225,8 @@ TEAM_NAME_MAPPING: Dict[str, Optional[str]] = {
     "NAC Breda W" : "NAC Breda W",
     "PEC ZWOLLE W" : "PEC Zwolle W",
     "PSV W": "PSV W",
-    "SC Heerenveen W", "SC Heerenveen W",
-    "Utrecht W", "Utrecht W",
+    "SC Heerenveen W": "SC Heerenveen W",
+    "Utrecht W" : "Utrecht W",
     
     
     # aliases

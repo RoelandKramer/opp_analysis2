@@ -257,7 +257,7 @@ def build_team_themes() -> Dict[str, TeamTheme]:
         "PSV W": TeamTheme("#E62528", "#FFFFFF", "logos/jong_psv.png"),
         "AZ W": TeamTheme("#DB0021", "#FFFFFF", "logos/jong_az.png"),
         "Utrecht W": TeamTheme("#ED1A2F", "#FFFFFF", "logos/jong_fc_utrecht.png"),
-        "Excelsior Rotterdam W": TeamTheme("#E2001A", "#000000", "logos/excelsior_rotterdam.png"),
+        "Excelsior Rotterdam W": TeamTheme("#000000", "#E2001A", "logos/excelsior_rotterdam.png"),
         "SC Heerenveen W": TeamTheme("#004F9F", "#FFFFFF", "logos/sc_heerenveen.png"),
         "FC Twente W": TeamTheme("#E6001A", "#FFFFFF", "logos/fc_twente.png"),
         "Hera United W": TeamTheme("#191970", "#FFFFFF", "logos/hera_united.png"),

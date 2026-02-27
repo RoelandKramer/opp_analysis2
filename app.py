@@ -747,7 +747,7 @@ if team_total == 0:
     st.stop()
 
 n_last = st.slider(
-    "Analyze last X matches (selected team only)",
+    "Adjust to only analyze the last X matches",
     min_value=1,
     max_value=team_total,
     value=min(st.session_state.get("n_last", team_total), team_total),

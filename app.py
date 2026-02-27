@@ -491,7 +491,7 @@ def _render_header(
           .team-subtitle {{ margin: 0.35rem 0 0 0; color: {subtitle_color}; font-size: 1.05rem; font-weight: 750; }}
           .team-meta {{ margin: 0; color: #000000; font-size: 0.98rem; font-weight: 800; }}
           .team-logo {{
-            position: absolute; top: 12px; right: 16px; height: 74px; width: 74px; object-fit: contain;
+            position: absolute; top: 6px; right: 16px; height: 74px; width: 74px; object-fit: contain;
             background: rgba(255,255,255,0.92); border-radius: 16px; padding: 9px;
           }}
         </style>

@@ -1376,7 +1376,112 @@ def attach_actual_club_from_events(headers_df: pd.DataFrame, events_seq_df: pd.D
     out = out.merge(map_rows, on=["match_id", "club"], how="left")
     out["club_actual_canon"] = out["club_actual"].apply(_canon_team)
     return out
+# ============================================================
+# file: opp_analysis_new.py
+# NEW: build header tables from corner_positions_headers.csv
+# (feeds your EXISTING plot_* functions unchanged)
+# ============================================================
 
+
+def build_header_tables_from_positions_headers(
+    headers_df: pd.DataFrame,
+    *,
+    events_seq_df: Optional[pd.DataFrame],
+    team: str,
+    exclude_goalkeepers: bool = True,
+) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    """
+    Returns att_tbl / def_tbl with the SAME column names your current plots expect:
+      - att_tbl: player_name, (optional s), Attacking_corners_headed, Attacking_corners_headed_and_scored
+      - def_tbl: player_name, (optional s), Defending_corners_defended, Defending_corners_errors, Defending_corners_fatal_errors
+
+    Uses corner_positions_headers.csv as source of truth for clearances
+    via Defending_corners_defended (summed per player).
+
+    Excludes goalkeepers when a GK indicator exists; otherwise leaves all rows.
+    """
+    if headers_df is None or headers_df.empty:
+        return pd.DataFrame(), pd.DataFrame()
+
+    df = headers_df.copy().where(pd.notnull(headers_df), None)
+
+    # Map HOME/AWAY -> actual team names when possible
+    if events_seq_df is not None and not events_seq_df.empty:
+        df = attach_actual_club_from_events(df, events_seq_df)
+
+    team_c = _canon_team(team) or team
+
+    # pick best club column to filter on
+    club_col = None
+    if "club_actual_canon" in df.columns and df["club_actual_canon"].notna().any():
+        club_col = "club_actual_canon"
+    elif "club_actual" in df.columns and df["club_actual"].notna().any():
+        club_col = "club_actual"
+    elif "teamName" in df.columns:
+        club_col = "teamName"
+    else:
+        # fall back: original "club" is HOME/AWAY only (not usable without mapping)
+        club_col = "club_actual_canon" if "club_actual_canon" in df.columns else None
+
+    if not club_col:
+        return pd.DataFrame(), pd.DataFrame()
+
+    def _same_team(x) -> bool:
+        return (_canon_team(x) or x) == team_c
+
+    df_team = df[df[club_col].apply(_same_team)].copy()
+    if df_team.empty:
+        return pd.DataFrame(), pd.DataFrame()
+
+    # GK exclusion: only if we can detect it from typical columns; else do nothing
+    if exclude_goalkeepers:
+        gk_cols = [c for c in ("position", "positionName", "playerPosition", "playerPositionName", "isGoalkeeper", "isGK") if c in df_team.columns]
+        if gk_cols:
+            def _is_gk(row) -> bool:
+                for c in gk_cols:
+                    v = row.get(c)
+                    if v is None:
+                        continue
+                    s = str(v).strip().upper()
+                    if s in {"GK", "GOALKEEPER", "KEEPER"} or "GOALKEEPER" in s:
+                        return True
+                    if c in {"isGoalkeeper", "isGK"} and bool(v) is True:
+                        return True
+                return False
+
+            df_team = df_team[~df_team.apply(_is_gk, axis=1)].copy()
+
+    if "player_name" not in df_team.columns:
+        df_team["player_name"] = df_team.get("playerName", "Unknown")
+
+    # ensure numeric fields exist
+    needed = [
+        "Attacking_corners_headed",
+        "Attacking_corners_headed_and_scored",
+        "Defending_corners_defended",
+        "Defending_corners_errors",
+        "Defending_corners_fatal_errors",
+    ]
+    for c in needed:
+        if c not in df_team.columns:
+            df_team[c] = 0
+        df_team[c] = pd.to_numeric(df_team[c], errors="coerce").fillna(0).astype(int)
+
+    group_cols = ["player_name"] + (["s"] if "s" in df_team.columns else [])
+    agg = df_team.groupby(group_cols, as_index=False)[needed].sum()
+
+    att_tbl = agg[["player_name"] + (["s"] if "s" in agg.columns else []) + [
+        "Attacking_corners_headed",
+        "Attacking_corners_headed_and_scored",
+    ]].copy()
+
+    def_tbl = agg[["player_name"] + (["s"] if "s" in agg.columns else []) + [
+        "Defending_corners_defended",
+        "Defending_corners_errors",
+        "Defending_corners_fatal_errors",
+    ]].copy()
+
+    return att_tbl, def_tbl
 
 @dataclass(frozen=True)
 class VizPaths:

@@ -969,15 +969,42 @@ def process_corner_data(
         "attacking_shots": {"left": att_shots_left, "right": att_shots_right},
         "tables": taker_tables,
         "used_matches_table": pd.DataFrame(used_match_rows),
-    }
+    }def _pick_corner_sequence_id(ev: Dict[str, Any]) -> Optional[str]:
+    """
+    Prefer per-corner sequence id if present, fallback to sequenceId.
+    """
+    for k in ("corner_sequence_id", "corner_sequenceId", "cornerSequenceId", "cornerSequence_id"):
+        v = ev.get(k)
+        if v is None:
+            continue
+        s = str(v).strip()
+        if s and s.lower() not in {"nan", "none"}:
+            return s
+
+    sid = ev.get("sequenceId")
+    if sid is None:
+        return None
+    s = str(sid).strip()
+    return s if s and s.lower() not in {"nan", "none"} else None
+
+
 def compute_league_attacking_corner_shot_rates(
     json_data: Dict[str, Any],
     *,
     shot_map: Optional[Dict[Tuple[str, str], bool]] = None,
 ) -> Dict[str, Dict[str, Dict[str, Dict[str, float]]]]:
-    matches = json_data.get("matches", [])
+    """
+    Returns:
+      stats[team][side][zone] = {"shots": int, "total": int, "pct": float}
+
+    Definitions:
+      - A "corner" is a TRUE corner start event: possessionTypeName == "CORNER" and sequenceStart truthy.
+      - The shot outcome is determined ONLY via `shot_map` keyed by (match_id, corner_seq_id).
+        This avoids the known issue where corner_events sequenceId groups are too broad (fallback => 100%).
+    """
+    matches = json_data.get("matches", []) or []
     stats: Dict[str, Dict[str, Dict[str, Dict[str, float]]]] = {}
-    seen_corner_keys = set()
+    seen_corner_keys: set[Tuple[str, str, Optional[str]]] = set()  # (match_id, team, corner_seq_id)
 
     def _ensure_bucket(team: str, side: str, zone: str) -> Dict[str, float]:
         stats.setdefault(team, {})
@@ -990,16 +1017,12 @@ def compute_league_attacking_corner_shot_rates(
         if not events:
             continue
 
-        match_id = str(match.get("match_id", "") or "")
+        match_id = str(match.get("match_id", "") or "").strip()
+        if not match_id:
+            continue
 
-        TOP_X, BOTTOM_X, LEFT_Y, RIGHT_Y = _resolve_pitch_bounds(match, events)
-        zones_TL, zones_BR, zones_TR, zones_BL = build_zones(TOP_X, BOTTOM_X, LEFT_Y, RIGHT_Y)
-
-        sequences_by_id = defaultdict(list)
-        for ev in events:
-            sid = _norm_seq_id(ev.get("sequenceId"))
-            if sid is not None:
-                sequences_by_id[sid].append(ev)
+        top_x, bottom_x, left_y, right_y = _resolve_pitch_bounds(match, events)
+        zones_tl, zones_br, zones_tr, zones_bl = build_zones(top_x, bottom_x, left_y, right_y)
 
         for e in events:
             if not _is_true_corner_start(e):
@@ -1013,28 +1036,27 @@ def compute_league_attacking_corner_shot_rates(
             if None in (sx, sy, ex, ey):
                 continue
 
-            corner_type = get_corner(float(sx), float(sy), TOP_X, LEFT_Y)
+            corner_type = get_corner(float(sx), float(sy), top_x, left_y)
             if not corner_type:
                 continue
 
             if corner_type in ("top_left", "bottom_right"):
-                local_zones, side = (zones_TL if corner_type == "top_left" else zones_BR), "left"
+                local_zones, side = (zones_tl if corner_type == "top_left" else zones_br), "left"
             else:
-                local_zones, side = (zones_TR if corner_type == "top_right" else zones_BL), "right"
+                local_zones, side = (zones_tr if corner_type == "top_right" else zones_bl), "right"
 
             zone_end = _assign_zone(float(ex), float(ey), local_zones) or _assign_zone(-float(ex), -float(ey), local_zones)
             if not _valid_zone_for_attacking_shots(zone_end):
                 continue
 
-            seq_id = _norm_seq_id(e.get("sequenceId"))
-            corner_key = (match_id, team, seq_id)
+            corner_seq_id = _pick_corner_sequence_id(e)
+            corner_key = (match_id, team, corner_seq_id)
             if corner_key in seen_corner_keys:
                 continue
             seen_corner_keys.add(corner_key)
 
-
             seq_has_shot = False
-            if shot_map is not None and match_id and corner_seq_id:
+            if shot_map is not None and corner_seq_id:
                 seq_has_shot = bool(shot_map.get((match_id, corner_seq_id), False))
 
             bucket = _ensure_bucket(team, side, zone_end)
@@ -1052,7 +1074,6 @@ def compute_league_attacking_corner_shot_rates(
                 d["pct"] = (shots / total) * 100.0 if total > 0 else 0.0
 
     return stats
-
 
 def _percentile_rank(values: List[float], value: float) -> Optional[int]:
     if not values:

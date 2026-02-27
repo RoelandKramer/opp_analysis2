@@ -955,7 +955,7 @@ def process_corner_data(
         tot = sum(c.values())
         return {k: (v / tot) * 100.0 for k, v in c.items()} if tot else {}
 
-    taker_tables = _build_corner_taker_tables(own_left_side, own_right_side, min_corners=5)
+    taker_tables = _build_corner_taker_tables(own_left_side, own_right_side, min_corners=2)
     att_shots_left = _calc_attacking_shot_stats(own_left_side)
     att_shots_right = _calc_attacking_shot_stats(own_right_side)
 

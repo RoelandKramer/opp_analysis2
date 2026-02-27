@@ -262,7 +262,7 @@ def build_team_themes() -> Dict[str, TeamTheme]:
         "FC Twente W": TeamTheme("#E6001A", "#FFFFFF", "logos/fc_twente.png"),
         "Hera United W": TeamTheme("#191970", "#FFFFFF", "logos/hera_united.png"),
         "NAC Breda W": TeamTheme("#282828", "#FFDD25", "logos/nac_breda.png"),
-        "Feyenoord W": TeamTheme("#FF0000", "#000000", "logos/feyenoord.png"),
+        "Feyenoord W": TeamTheme("#000000", "#FF0000", "logos/feyenoord.png"),
         "PEC Zwolle W": TeamTheme("#1E59AE", "#6AC2EE", "logos/pec_zwolle.png"),
         "PEC ZWOLLE W": TeamTheme("#1E59AE", "#6AC2EE", "logos/pec_zwolle.png"),
     }

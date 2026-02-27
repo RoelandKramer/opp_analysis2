@@ -85,152 +85,152 @@ def slugify(name: str) -> str:
     s = re.sub(r"[\s_-]+", "_", s)
     return s
 
-# ============================================================
-# DEBUG helpers (Streamlit-visible)
-# ============================================================
+# # ============================================================
+# # DEBUG helpers (Streamlit-visible)
+# # ============================================================
 
-DEBUG_TOKENS = ("{att_corners_headers}", "{def_corners_headers}")
-DEBUG_SHAPE_NAMES = ("PH_att_c_headers", "PH_def_c_headers")
-
-
-def _ppt_scan_tokens_and_shapes_from_bytes(pptx_bytes: bytes) -> dict:
-    """
-    Returns which header tokens still exist in the PPTX and whether named shapes exist.
-    """
-    prs = Presentation(io.BytesIO(pptx_bytes))
-    found_tokens = set()
-    found_shapes = set()
-
-    for slide in prs.slides:
-        for shp in slide.shapes:
-            nm = getattr(shp, "name", "")
-            if nm in DEBUG_SHAPE_NAMES:
-                found_shapes.add(nm)
-            if getattr(shp, "has_text_frame", False):
-                txt = shp.text_frame.text or ""
-                for t in DEBUG_TOKENS:
-                    if t in txt:
-                        found_tokens.add(t)
-
-    return {
-        "tokens_present": sorted(found_tokens),
-        "shapes_present": sorted(found_shapes),
-        "slides": len(prs.slides),
-    }
+# DEBUG_TOKENS = ("{att_corners_headers}", "{def_corners_headers}")
+# DEBUG_SHAPE_NAMES = ("PH_att_c_headers", "PH_def_c_headers")
 
 
-def _pick_corner_sequence_id_from_corner_event(ev: dict) -> Optional[str]:
-    for k in ("corner_sequence_id", "corner_sequenceId", "cornerSequenceId", "cornerSequence_id"):
-        v = ev.get(k)
-        if v is not None:
-            s = str(v).strip()
-            if s and s.lower() not in {"nan", "none"}:
-                return s
-    v = ev.get("sequenceId")
-    if v is not None:
-        s = str(v).strip()
-        if s and s.lower() not in {"nan", "none"}:
-            return s
-    return None
+# def _ppt_scan_tokens_and_shapes_from_bytes(pptx_bytes: bytes) -> dict:
+#     """
+#     Returns which header tokens still exist in the PPTX and whether named shapes exist.
+#     """
+#     prs = Presentation(io.BytesIO(pptx_bytes))
+#     found_tokens = set()
+#     found_shapes = set()
+
+#     for slide in prs.slides:
+#         for shp in slide.shapes:
+#             nm = getattr(shp, "name", "")
+#             if nm in DEBUG_SHAPE_NAMES:
+#                 found_shapes.add(nm)
+#             if getattr(shp, "has_text_frame", False):
+#                 txt = shp.text_frame.text or ""
+#                 for t in DEBUG_TOKENS:
+#                     if t in txt:
+#                         found_tokens.add(t)
+
+#     return {
+#         "tokens_present": sorted(found_tokens),
+#         "shapes_present": sorted(found_shapes),
+#         "slides": len(prs.slides),
+#     }
 
 
-def _build_seq_map_for_match(match: dict) -> dict:
-    seq_by_id = defaultdict(list)
-    for ev in match.get("corner_events", []) or []:
-        sid = ev.get("sequenceId")
-        if sid is None:
-            continue
-        s = str(sid).strip()
-        if s:
-            seq_by_id[s].append(ev)
-    return seq_by_id
+# def _pick_corner_sequence_id_from_corner_event(ev: dict) -> Optional[str]:
+#     for k in ("corner_sequence_id", "corner_sequenceId", "cornerSequenceId", "cornerSequence_id"):
+#         v = ev.get(k)
+#         if v is not None:
+#             s = str(v).strip()
+#             if s and s.lower() not in {"nan", "none"}:
+#                 return s
+#     v = ev.get("sequenceId")
+#     if v is not None:
+#         s = str(v).strip()
+#         if s and s.lower() not in {"nan", "none"}:
+#             return s
+#     return None
 
 
-def debug_attacking_shots_streamlit(
-    *,
-    json_data_full: dict,
-    selected_team: str,
-    shot_map: Dict[Tuple[str, str], bool],
-    n_last: int,
-) -> pd.DataFrame:
-    """
-    Diagnoses why attacking corners show 100% lead-to-shot.
-    Returns a dataframe of corner rows with map vs fallback.
-    """
-    matches_full = json_data_full.get("matches", []) or []
-    team_matches_sorted = sorted(
-        [m for m in matches_full if _match_has_team(m, selected_team)],
-        key=_match_dt,
-        reverse=True,
-    )
-    team_matches_window = team_matches_sorted[:n_last]
-
-    rows = []
-    for m in team_matches_window:
-        match_id = str(m.get("match_id") or "").strip()
-        seq_by_id = _build_seq_map_for_match(m)
-
-        for e in (m.get("corner_events", []) or []):
-            if not (e.get("possessionTypeName") == "CORNER" and oa.truthy(e.get("sequenceStart"))):
-                continue
-            if oa.get_canonical_team(e.get("teamName")) != selected_team:
-                continue
-
-            seq_id = str(e.get("sequenceId")).strip() if e.get("sequenceId") is not None else None
-            corner_seq_id = _pick_corner_sequence_id_from_corner_event(e) or seq_id
-
-            by_map = bool(shot_map.get((match_id, corner_seq_id), False)) if match_id and corner_seq_id else False
-            by_fallback = oa._sequence_has_shot(seq_by_id.get(seq_id, [])) if seq_id else False
-
-            rows.append(
-                {
-                    "match_id": match_id,
-                    "sequenceId": seq_id,
-                    "corner_seq_id": corner_seq_id,
-                    "map_has_shot": by_map,
-                    "fallback_has_shot": by_fallback,
-                    "zone": e.get("zone"),
-                    "corner_side": e.get("corner_side"),
-                }
-            )
-
-    df = pd.DataFrame(rows)
-    return df
+# def _build_seq_map_for_match(match: dict) -> dict:
+#     seq_by_id = defaultdict(list)
+#     for ev in match.get("corner_events", []) or []:
+#         sid = ev.get("sequenceId")
+#         if sid is None:
+#             continue
+#         s = str(sid).strip()
+#         if s:
+#             seq_by_id[s].append(ev)
+#     return seq_by_id
 
 
-def debug_headers_streamlit(
-    *,
-    seq_csv_path: str,
-    selected_team: str,
-) -> dict:
-    """
-    Builds header tables/figs and returns debug info + optional PNG bytes.
-    """
-    out = {"ok": True, "error": None, "att_rows": 0, "def_rows": 0, "att_png": None, "def_png": None}
+# def debug_attacking_shots_streamlit(
+#     *,
+#     json_data_full: dict,
+#     selected_team: str,
+#     shot_map: Dict[Tuple[str, str], bool],
+#     n_last: int,
+# ) -> pd.DataFrame:
+#     """
+#     Diagnoses why attacking corners show 100% lead-to-shot.
+#     Returns a dataframe of corner rows with map vs fallback.
+#     """
+#     matches_full = json_data_full.get("matches", []) or []
+#     team_matches_sorted = sorted(
+#         [m for m in matches_full if _match_has_team(m, selected_team)],
+#         key=_match_dt,
+#         reverse=True,
+#     )
+#     team_matches_window = team_matches_sorted[:n_last]
 
-    if not os.path.exists(seq_csv_path):
-        out.update({"ok": False, "error": f"Missing full sequences CSV: {seq_csv_path}"})
-        return out
+#     rows = []
+#     for m in team_matches_window:
+#         match_id = str(m.get("match_id") or "").strip()
+#         seq_by_id = _build_seq_map_for_match(m)
 
-    try:
-        seq_df = load_events_sequences(seq_csv_path, st.session_state.dataset_id)
-        att_tbl, def_tbl = oa.build_header_tables_from_full_sequences(seq_df, team=selected_team)
+#         for e in (m.get("corner_events", []) or []):
+#             if not (e.get("possessionTypeName") == "CORNER" and oa.truthy(e.get("sequenceStart"))):
+#                 continue
+#             if oa.get_canonical_team(e.get("teamName")) != selected_team:
+#                 continue
 
-        out["att_rows"] = 0 if att_tbl is None else int(len(att_tbl))
-        out["def_rows"] = 0 if def_tbl is None else int(len(def_tbl))
+#             seq_id = str(e.get("sequenceId")).strip() if e.get("sequenceId") is not None else None
+#             corner_seq_id = _pick_corner_sequence_id_from_corner_event(e) or seq_id
 
-        if att_tbl is not None and not att_tbl.empty:
-            fig_att = oa.plot_attacking_corner_players_headers(att_tbl, max_players=15)
-            out["att_png"] = fig_to_png_bytes_labels(fig_att, dpi=240)
+#             by_map = bool(shot_map.get((match_id, corner_seq_id), False)) if match_id and corner_seq_id else False
+#             by_fallback = oa._sequence_has_shot(seq_by_id.get(seq_id, [])) if seq_id else False
 
-        if def_tbl is not None and not def_tbl.empty:
-            fig_def = oa.plot_defending_corner_players_diverging(def_tbl, max_players=15)
-            out["def_png"] = fig_to_png_bytes_labels(fig_def, dpi=240)
+#             rows.append(
+#                 {
+#                     "match_id": match_id,
+#                     "sequenceId": seq_id,
+#                     "corner_seq_id": corner_seq_id,
+#                     "map_has_shot": by_map,
+#                     "fallback_has_shot": by_fallback,
+#                     "zone": e.get("zone"),
+#                     "corner_side": e.get("corner_side"),
+#                 }
+#             )
 
-    except Exception as e:
-        out.update({"ok": False, "error": repr(e)})
+#     df = pd.DataFrame(rows)
+#     return df
 
-    return out
+
+# def debug_headers_streamlit(
+#     *,
+#     seq_csv_path: str,
+#     selected_team: str,
+# ) -> dict:
+#     """
+#     Builds header tables/figs and returns debug info + optional PNG bytes.
+#     """
+#     out = {"ok": True, "error": None, "att_rows": 0, "def_rows": 0, "att_png": None, "def_png": None}
+
+#     if not os.path.exists(seq_csv_path):
+#         out.update({"ok": False, "error": f"Missing full sequences CSV: {seq_csv_path}"})
+#         return out
+
+#     try:
+#         seq_df = load_events_sequences(seq_csv_path, st.session_state.dataset_id)
+#         att_tbl, def_tbl = oa.build_header_tables_from_full_sequences(seq_df, team=selected_team)
+
+#         out["att_rows"] = 0 if att_tbl is None else int(len(att_tbl))
+#         out["def_rows"] = 0 if def_tbl is None else int(len(def_tbl))
+
+#         if att_tbl is not None and not att_tbl.empty:
+#             fig_att = oa.plot_attacking_corner_players_headers(att_tbl, max_players=15)
+#             out["att_png"] = fig_to_png_bytes_labels(fig_att, dpi=240)
+
+#         if def_tbl is not None and not def_tbl.empty:
+#             fig_def = oa.plot_defending_corner_players_diverging(def_tbl, max_players=15)
+#             out["def_png"] = fig_to_png_bytes_labels(fig_def, dpi=240)
+
+#     except Exception as e:
+#         out.update({"ok": False, "error": repr(e)})
+
+#     return out
     
 def build_team_themes() -> Dict[str, TeamTheme]:
     return {
@@ -858,13 +858,7 @@ if st.session_state.get("debug_mode", False):
                 mime="text/csv",
             )
 with st.sidebar:
-    st.divider()
-    st.toggle(
-        "Debug mode",
-        value=False,
-        key="debug_mode",
-        help="Show diagnostics for headers + shot mapping.",
-    )
+
 
     if "uploader_key" not in st.session_state:
         st.session_state.uploader_key = 0

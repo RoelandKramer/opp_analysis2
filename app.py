@@ -20,8 +20,26 @@ import streamlit as st
 
 import opp_analysis_new as oa
 import update_database as upd
-from ppt_template_filler import fill_corner_template_pptx, fig_to_png_bytes, fig_to_png_bytes_labels, fig_to_png_bytes_and_close, fig_to_png_bytes_labels_and_close
+from ppt_template_filler import fill_corner_template_pptx, fig_to_png_bytes, fig_to_png_bytes_labels
+import matplotlib.pyplot as plt
 
+def fig_to_png_bytes_and_close(fig, *, dpi=240) -> bytes:
+    try:
+        return fig_to_png_bytes(fig, dpi=dpi)
+    finally:
+        try:
+            plt.close(fig)
+        except Exception:
+            pass
+
+def fig_to_png_bytes_labels_and_close(fig, *, dpi=240) -> bytes:
+    try:
+        return fig_to_png_bytes_labels(fig, dpi=dpi)
+    finally:
+        try:
+            plt.close(fig)
+        except Exception:
+            pass
 # --- Secrets -> env for git push (safe) ---
 if "GITHUB_TOKEN" in st.secrets:
     os.environ["GITHUB_TOKEN"] = st.secrets["GITHUB_TOKEN"]

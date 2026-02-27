@@ -968,8 +968,9 @@ def process_corner_data(
         "attacking": {"left_pct": _zone_pcts(own_left_side), "right_pct": _zone_pcts(own_right_side)},
         "attacking_shots": {"left": att_shots_left, "right": att_shots_right},
         "tables": taker_tables,
-        "used_matches_table": pd.DataFrame(used_match_rows),
-    }def _pick_corner_sequence_id(ev: Dict[str, Any]) -> Optional[str]:
+        "used_matches_table": pd.DataFrame(used_match_rows),}
+    
+    def _pick_corner_sequence_id(ev: Dict[str, Any]) -> Optional[str]:
     """
     Prefer per-corner sequence id if present, fallback to sequenceId.
     """

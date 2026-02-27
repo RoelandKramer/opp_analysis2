@@ -773,7 +773,7 @@ if generate:
 
     st.success("✅ PowerPoint generated.")
     st.download_button(
-        "Download filled template (.pptx)",
+        "Download Analysis as pptx",
         data=pptx_bytes,
         file_name=fname,
         mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",

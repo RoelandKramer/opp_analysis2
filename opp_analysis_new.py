@@ -1,4 +1,4 @@
-# ============================================================
+_# ============================================================
 # file: opp_analysis_new.py
 # ============================================================
 from __future__ import annotations
@@ -700,12 +700,28 @@ def _display_player_with_jersey(ev: Dict[str, Any], fallback_name: str) -> str:
     jersey = _extract_jersey_number(ev)
     return name if jersey is None else f"{jersey}. {name}"
 
-
+# ============================================================
+# file: opp_analysis_new.py
+# replace ENTIRE _build_corner_taker_tables with this version
+# ============================================================
 def _build_corner_taker_tables(
     left_corners: List[Dict[str, Any]],
     right_corners: List[Dict[str, Any]],
+    *,
     min_corners: int = 5,
+    top_k_always: int = 3,
 ) -> Dict[str, pd.DataFrame]:
+    """
+    Builds takers tables for left/right corners.
+
+    Behavior:
+      - Prefer stable key: playerId if valid else playerName.
+      - Skips events with missing playerName (cannot assign taker).
+      - Includes all players with total >= min_corners.
+      - Additionally ensures at least `top_k_always` players are shown by
+        adding the next-highest takers even if below min_corners.
+    """
+
     def _one_side_table(corners: List[Dict[str, Any]]) -> pd.DataFrame:
         total_by_player = Counter()
         zone_counts = defaultdict(Counter)
@@ -713,9 +729,12 @@ def _build_corner_taker_tables(
         cross_successes = defaultdict(int)
         display_by_key: Dict[Any, str] = {}
 
+        missing_name = 0
+
         for e in corners:
             raw_name = (e.get("playerName") or "").strip()
             if not raw_name:
+                missing_name += 1
                 continue
 
             pid = _safe_int(e.get("playerId"), default=-1)
@@ -734,13 +753,27 @@ def _build_corner_taker_tables(
                 if e.get("resultName") == "SUCCESSFUL":
                     cross_successes[key] += 1
 
-        rows = []
-        for key, total in total_by_player.items():
-            if total < min_corners:
-                continue
+        if not total_by_player:
+            return pd.DataFrame(columns=["Player", "Corners", "Cross Succ. %", "1st Choice", "2nd Choice", "3rd Choice"])
 
-            attempts = cross_attempts[key]
-            succ = cross_successes[key]
+        # ---- choose which players to include ----
+        # base: anyone above threshold
+        included = {k for k, tot in total_by_player.items() if tot >= min_corners}
+
+        # ensure at least top_k_always by total corners
+        if top_k_always > 0 and len(included) < top_k_always:
+            for k, _tot in sorted(total_by_player.items(), key=lambda kv: (-kv[1], str(kv[0]))):
+                included.add(k)
+                if len(included) >= top_k_always:
+                    break
+
+        # ---- build rows ----
+        rows = []
+        for key in included:
+            total = int(total_by_player[key])
+
+            attempts = int(cross_attempts.get(key, 0))
+            succ = int(cross_successes.get(key, 0))
             rate = round((succ / attempts) * 100.0, 1) if attempts > 0 else np.nan
 
             counts = zone_counts[key]
@@ -751,14 +784,14 @@ def _build_corner_taker_tables(
                 if idx >= len(valid_zones):
                     return "-"
                 zn, cnt = valid_zones[idx]
-                pct = round((cnt / total) * 100.0, 0)
+                pct = round((cnt / total) * 100.0, 0) if total > 0 else 0
                 display_zn = "Short" if zn == "Short_Corner_Zone" else zn
                 return f"{display_zn} ({int(pct)}%)"
 
             rows.append(
                 {
                     "Player": display_by_key.get(key, str(key)),
-                    "Corners": int(total),
+                    "Corners": total,
                     "Cross Succ. %": f"{rate}%" if not pd.isna(rate) else "-",
                     "1st Choice": fmt_zone(0),
                     "2nd Choice": fmt_zone(1),
@@ -767,10 +800,12 @@ def _build_corner_taker_tables(
             )
 
         df = pd.DataFrame(rows)
-        return df if df.empty else df.sort_values(["Corners"], ascending=[False]).reset_index(drop=True)
+        if df.empty:
+            return df
+
+        return df.sort_values(["Corners", "Player"], ascending=[False, True]).reset_index(drop=True)
 
     return {"left": _one_side_table(left_corners), "right": _one_side_table(right_corners)}
-
 
 def _calc_attacking_shot_stats(corners: List[Dict[str, Any]]):
     total_by_zone = Counter()

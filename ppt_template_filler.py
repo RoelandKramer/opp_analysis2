@@ -27,7 +27,7 @@ class CropSpec:
 
 
 CROP_BY_SHAPE_NAME: Dict[str, CropSpec] = {
-    "PH_Corners_left_positions_vis": CropSpec(left=0.0162, top=0.1760, bottom=0.0230),
+    "PH_Corners_left_positions_vis": CropSpec(left=0.0162, top=0.1790, bottom=0.0230),
     "PH_Corners_right_positions_vis": CropSpec(left=0.0162, right=0.0700, top=0.1287, bottom=0.2993),
     "PH_Corners_left_shots_vis": CropSpec(bottom=0.2514),
     "PH_Corners_right_shots_vis": CropSpec(bottom=0.2514),

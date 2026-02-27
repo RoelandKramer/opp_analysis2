@@ -670,7 +670,12 @@ def _sequence_has_shot(seq: List[Dict[str, Any]]) -> bool:
 
 def _valid_zone_for_shot_lists(zone_val: Any) -> bool:
     return bool(zone_val and str(zone_val).strip() and zone_val != "Short_Corner_Zone")
-
+    
+def _valid_zone_for_defensive(zone_val: Any) -> bool:
+    """
+    Defensive heatmaps should include Short_Corner_Zone.
+    """
+    return bool(zone_val and str(zone_val).strip())
 
 def _valid_zone_for_attacking_shots(zone_val: Any) -> bool:
     return bool(zone_val and str(zone_val).strip() and zone_val != "Unassigned")
@@ -924,16 +929,15 @@ def process_corner_data(
                 sev["zone"] = zone_end
                 sev["corner_side"] = e_side
 
-            if (not is_own) and seq_has_shot and _valid_zone_for_shot_lists(zone_end):
+            if (not is_own) and seq_has_shot and _valid_zone_for_defensive(zone_end):
                 opponent_seq_with_shot.append(seq_evs)
-
+                
     def _calc_defensive_stats(
         opp_corners: List[Dict[str, Any]],
         opp_shot_seqs: List[List[Dict[str, Any]]],
         side_filter: str,
-    ):
-        total_zone = Counter([c.get("zone") for c in opp_corners if _valid_zone_for_shot_lists(c.get("zone"))])
-
+    ):    
+        total_zone = Counter([c.get("zone") for c in opp_corners if _valid_zone_for_defensive(c.get("zone"))])
         shot_seq_ids = defaultdict(set)
         for seq in opp_shot_seqs:
             start = next((x for x in seq if truthy(x.get("sequenceStart"))), seq[0])

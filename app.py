@@ -20,7 +20,7 @@ import streamlit as st
 
 import opp_analysis_new as oa
 import update_database as upd
-from ppt_template_filler import fill_corner_template_pptx, fig_to_png_bytes, fig_to_png_bytes_labels
+from ppt_template_filler import fill_corner_template_pptx, fig_to_png_bytes, fig_to_png_bytes_labels, fig_to_png_bytes_and_close, fig_to_png_bytes_labels_and_close
 
 # --- Secrets -> env for git push (safe) ---
 if "GITHUB_TOKEN" in st.secrets:
@@ -637,22 +637,22 @@ def _generate_filled_pptx(
             st.error(f"Header charts failed: {e!r}")
             st.exception(e)
     # after fig_att_headers / fig_def_headers are created:
-    att_headers_png = fig_to_png_bytes_labels(fig_att_headers, dpi=360) if fig_att_headers is not None else None
-    def_headers_png = fig_to_png_bytes_labels(fig_def_headers, dpi=360) if fig_def_headers is not None else None
+    att_headers_png = fig_to_png_bytes_labels_and_close(fig_att_headers, dpi=360) if fig_att_headers is not None else None
+    def_headers_png = fig_to_png_bytes_labels_and_close(fig_def_headers, dpi=360) if fig_def_headers is not None else None
     
     images_by_shape_name = {
         0: {
-            "PH_Corners_left_positions_vis": fig_to_png_bytes(fig_att_L, dpi=360),
-            "PH_Corners_right_positions_vis": fig_to_png_bytes(fig_att_R, dpi=360),
-            "PH_Corners_left_shots_vis": fig_to_png_bytes(fig_att_shots_L, dpi=360),
-            "PH_Corners_right_shots_vis": fig_to_png_bytes(fig_att_shots_R, dpi=360),
+            "PH_Corners_left_positions_vis": fig_to_png_bytes_and_close(fig_att_L, dpi=360),
+            "PH_Corners_right_positions_vis": fig_to_png_bytes_and_close(fig_att_R, dpi=360),
+            "PH_Corners_left_shots_vis": fig_to_png_bytes_and_close(fig_att_shots_L, dpi=360),
+            "PH_Corners_right_shots_vis": fig_to_png_bytes_and_close(fig_att_shots_R, dpi=360),
     
             **({"PH_att_c_headers": att_headers_png} if att_headers_png else {}),
             **({"PH_def_c_headers": def_headers_png} if def_headers_png else {}),
         },
         1: {
-            "PH_def_left": fig_to_png_bytes(fig_def_L, dpi=360),
-            "PH_def_right": fig_to_png_bytes(fig_def_R, dpi=360),
+            "PH_def_left": fig_to_png_bytes_and_close(fig_def_L, dpi=360),
+            "PH_def_right": fig_to_png_bytes_and_close(fig_def_R, dpi=360),
         },
     }
 

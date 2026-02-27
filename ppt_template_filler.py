@@ -53,6 +53,24 @@ def _hex_to_rgb(hex_color: str) -> RGBColor:
     return RGBColor(int(s[0:2], 16), int(s[2:4], 16), int(s[4:6], 16))
 
 
+def fig_to_png_bytes_and_close(fig, *, dpi=240) -> bytes:
+    try:
+        return fig_to_png_bytes(fig, dpi=dpi)
+    finally:
+        try:
+            plt.close(fig)
+        except Exception:
+            pass
+
+def fig_to_png_bytes_labels_and_close(fig, *, dpi=240) -> bytes:
+    try:
+        return fig_to_png_bytes_labels(fig, dpi=dpi)
+    finally:
+        try:
+            plt.close(fig)
+        except Exception:
+            pass
+            
 def fig_to_png_bytes(fig: matplotlib.figure.Figure, *, dpi: int = 240) -> bytes:
     try:
         fig.subplots_adjust(left=0, right=1, top=1, bottom=0, wspace=0, hspace=0)
